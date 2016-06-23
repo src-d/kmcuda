@@ -19,6 +19,7 @@ Building
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
+It requires cudart 7.5 / OpenMP 4.0 capable compiler.
 
 Python example
 --------------
@@ -40,3 +41,60 @@ pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
 ```
 You should see something like this:
 ![Clustered dots](cls.png)
+
+Python API
+----------
+```python
+def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False, seed=time(),
+                device=0, verbosity=0)
+```
+**samples** numpy array of shape [number of samples, number of features]
+
+**clusters** the number of clusters
+
+**tolerance** if the relative number of reassignments drops below this value, stop
+
+**kmpp** boolean, indicates whether to do kmeans++ initialization
+
+**seed** random generator seed for reproducible results
+
+**device** integer, CUDA device index
+
+**verbosity** 0 means complete silence, 1 means mere progress logging, 2 means lots of output
+
+C API
+-----
+```C
+int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
+                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
+                uint32_t device, int32_t verbosity, const float *samples,
+                float *centroids, uint32_t *assignments)
+```
+**kmpp** indicates whether to do kmeans++ initialization. If false,
+ordinary random centroids will be picked.
+
+**samples_size** number of samples.
+
+**features_size** number of features.
+
+**clusters_size** number of clusters.
+
+**seed** random generator seed passed to srand().
+
+**device** CUDA device index - usually 0.
+
+**verbosity** 0 - no output; 1 - progress output; >=2 - debug output.
+
+**samples** input array of size samples_size x features_size in row major format.
+
+**centroids** output array of centroids of size clusters_size x features_size
+in row major format.
+
+**assignments** output array of cluster indices for each sample of size
+samples_size x 1.
+
+Returs KMCUDAResult (see `kmcuda.h`);
+
+License
+-------
+MIT license.

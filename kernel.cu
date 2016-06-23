@@ -187,7 +187,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
 }
 
 KMCUDAResult kmeans_cuda_internal(
-    uint32_t samples_size, uint32_t clusters_size, int32_t verbosity,
+    float tolerance, uint32_t samples_size, uint32_t clusters_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts, uint32_t *assignments) {
   dim3 sblock(BLOCK_SIZE, 1, 1);
   dim3 sgrid(samples_size / sblock.x + 1, 1, 1);
@@ -209,7 +209,7 @@ KMCUDAResult kmeans_cuda_internal(
     if (verbosity > 0) {
       printf("iteration %d: %" PRIu32 " reassignments\n", i, changed_);
     }
-    if (!changed_) {
+    if (changed_ <= tolerance * samples_size) {
       break;
     }
     changed_ = 0;

@@ -13,6 +13,12 @@
 
 #include "wrappers.h"
 
+enum KMCUDAInitMethod {
+  kmcudaInitMethodRandom = 0,
+  kmcudaInitMethodPlusPlus
+};
+
+
 extern "C" {
 
 KMCUDAResult kmeans_cuda_plus_plus(
@@ -24,7 +30,7 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
                                int32_t verbosity);
 
 KMCUDAResult kmeans_cuda_internal(
-    uint32_t samples_size, uint32_t clusters_size, int32_t verbosity,
+    float tolerance, uint32_t samples_size, uint32_t clusters_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts, uint32_t *assignments);
 
 }
@@ -176,15 +182,15 @@ static KMCUDAResult init_centroids_gpu(
 
 extern "C" {
 
-int kmeans_cuda(bool kmpp, uint32_t samples_size, uint16_t features_size,
-                uint32_t clusters_size, int32_t verbosity, uint32_t seed,
-                uint32_t device, const float *samples, float *centroids,
-                uint32_t *assignments) {
+int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
+                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
+                uint32_t device, int32_t verbosity, const float *samples,
+                float *centroids, uint32_t *assignments) {
   if (verbosity > 1) {
-    printf("arguments: %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIi32
-           " %" PRIu32 " %" PRIu32 " %p %p %p\n",
-           kmpp, samples_size, features_size, clusters_size, verbosity, seed,
-           device, samples, centroids, assignments);
+    printf("arguments: %d %.3f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
+           " %" PRIu32 " %" PRIi32 " %p %p %p\n",
+           kmpp, tolerance, samples_size, features_size, clusters_size,
+           seed, device, verbosity, samples, centroids, assignments);
   }
   auto check_result = check_args(samples_size, features_size, clusters_size,
                                  samples, centroids, assignments);
@@ -267,7 +273,7 @@ int kmeans_cuda(bool kmpp, uint32_t samples_size, uint16_t features_size,
     return kmcudaRuntimeError;
   }
   result = kmeans_cuda_internal(
-      samples_size, clusters_size, verbosity,
+      tolerance, samples_size, clusters_size, verbosity,
       reinterpret_cast<float*>(device_samples),
       reinterpret_cast<float*>(device_centroids),
       reinterpret_cast<uint32_t*>(device_ccounts),
