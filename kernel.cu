@@ -22,22 +22,21 @@ __global__ void kmeans_plus_plus(
   }
   uint32_t soffset = sample * features_size;
   extern __shared__ float local_dists[];
-  float min_dist = FLT_MAX;
-  for (uint32_t c = 0; c < cc; c++) {
-    float dist = 0;
-    uint32_t coffset = c * features_size;
-    for (uint16_t f = 0; f < features_size; f++) {
-      float myf = samples[soffset + f];
-      float d = myf - centroids[coffset + f];
-      dist += d * d;
-    }
-    if (dist < min_dist) {
-      min_dist = dist;
-    }
+  float dist = 0;
+  uint32_t coffset = (cc - 1) * features_size;
+  for (uint16_t f = 0; f < features_size; f++) {
+    float myf = samples[soffset + f];
+    float d = myf - centroids[coffset + f];
+    dist += d * d;
   }
-  min_dist = sqrt(min_dist);
-  dists[sample] = min_dist;
-  local_dists[threadIdx.x] = min_dist;
+  dist = sqrt(dist);
+  float prev_dist = dists[sample];
+  if (dist < prev_dist || cc == 1) {
+    dists[sample] = dist;
+  } else {
+    dist = prev_dist;
+  }
+  local_dists[threadIdx.x] = dist;
   __syncthreads();
   if (threadIdx.x == 0) {
     uint32_t end = blockDim.x;

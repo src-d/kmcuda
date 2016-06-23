@@ -40,6 +40,11 @@ do { if (cudaMemcpy(dst, src, size, flag) != cudaSuccess) { \
   return kmcudaMemoryCopyError; \
 } } while(false)
 
+#define cumemcpy_async(dst, src, size, flag) \
+do { if (cudaMemcpyAsync(dst, src, size, flag) != cudaSuccess) { \
+  return kmcudaMemoryCopyError; \
+} } while(false)
+
 static int check_args(uint32_t samples_size, uint16_t features_size,
                       uint32_t clusters_size, const float *samples,
                       float *centroids, uint32_t *assignments) {
@@ -117,6 +122,7 @@ static KMCUDAResult init_centroids_gpu(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, int32_t verbosity, float *samples,
     float *centroids, void *dists) {
+  uint32_t ssize = features_size * sizeof(float);
   srand(seed);
   switch (method) {
     case kmcudaInitMethodRandom:
@@ -125,9 +131,18 @@ static KMCUDAResult init_centroids_gpu(
         fflush(stdout);
       }
       for (uint32_t c = 0; c < clusters_size; c++) {
-        cumemcpy(centroids + c * features_size,
-                 samples + (rand() % samples_size) * features_size,
-                 features_size * sizeof(float), cudaMemcpyDeviceToDevice);
+        if ((c + 1) % 1000 == 0 || c == clusters_size - 1) {
+          if (verbosity > 0) {
+            printf("centroid #%" PRIu32 "\n", c + 1);
+          }
+          cumemcpy(centroids + c * features_size,
+                   samples + (rand() % samples_size) * features_size,
+                   ssize, cudaMemcpyDeviceToDevice);
+        } else {
+          cumemcpy_async(centroids + c * features_size,
+                         samples + (rand() % samples_size) * features_size,
+                         ssize, cudaMemcpyDeviceToDevice);
+        }
       }
       break;
     case kmcudaInitMethodPlusPlus:
@@ -136,7 +151,7 @@ static KMCUDAResult init_centroids_gpu(
         fflush(stdout);
       }
       cumemcpy(centroids, samples + (rand() % samples_size) * features_size,
-               features_size * sizeof(float), cudaMemcpyDeviceToDevice);
+               ssize, cudaMemcpyDeviceToDevice);
       std::unique_ptr<float[]> host_dists(new float[samples_size]);
       float *dev_sums = NULL;
       unique_devptrptr dev_sums_sentinel(reinterpret_cast<void**>(&dev_sums));
@@ -165,8 +180,9 @@ static KMCUDAResult init_centroids_gpu(
           dist_sum2 += host_dists[j];
         }
         assert(j > 0);
-        cumemcpy(centroids + i * features_size, samples + (j - 1) * features_size,
-                 features_size * sizeof(float), cudaMemcpyDeviceToDevice);
+        cumemcpy(centroids + i * features_size,
+                 samples + (j - 1) * features_size,
+                 ssize, cudaMemcpyDeviceToDevice);
       }
       break;
   }
