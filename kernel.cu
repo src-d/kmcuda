@@ -199,6 +199,9 @@ KMCUDAResult kmeans_cuda_internal(
     return kmcudaMemoryCopyError;
   }
   my_shmem_size *= sizeof(uint32_t);
+  if (cudaMemset(ccounts, 0, clusters_size * sizeof(uint32_t)) != cudaSuccess) {
+    return kmcudaRuntimeError;
+  }
   for (int i = 1; ; i++) {
     kmeans_assign<<<sgrid, sblock>>>(samples, centroids, ccounts, assignments);
     uint32_t changed_ = 0;

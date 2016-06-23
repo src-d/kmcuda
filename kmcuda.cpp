@@ -231,11 +231,11 @@ int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
   }
   unique_devptr device_assignments_sentinel(device_assignments);
   void *device_ccounts;
-  if (cudaMalloc(&device_ccounts, clusters_size * sizeof(uint32_t))
+  size_t ccounts_size = clusters_size * sizeof(uint32_t);
+  if (cudaMalloc(&device_ccounts, ccounts_size)
       != cudaSuccess) {
     if (verbosity > 0) {
-      printf("failed to allocate %zu bytes for ccounts\n",
-             clusters_size * sizeof(uint32_t));
+      printf("failed to allocate %zu bytes for ccounts\n", ccounts_size);
     }
     return kmcudaMemoryAllocationFailure;
   }
