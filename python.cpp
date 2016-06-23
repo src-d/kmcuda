@@ -52,13 +52,15 @@ class pyobj : public pyobj_parent {
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size, seed = static_cast<uint32_t>(time(NULL));
   int32_t verbosity = 0;
+  bool kmpp = false;
   PyObject *samples_obj;
-  static const char *kwlist[] = {"samples", "clusters", "seed", "verbosity", NULL};
+  static const char *kwlist[] = {"samples", "clusters", "kmpp", "seed",
+                                 "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OI|Ii", const_cast<char**>(kwlist),
-          &samples_obj, &clusters_size, &seed, &verbosity)) {
+          args, kwargs, "OI|pIi", const_cast<char**>(kwlist),
+          &samples_obj, &clusters_size, &kmpp, &seed, &verbosity)) {
     return NULL;
   }
   if (clusters_size < 2) {
@@ -96,9 +98,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t *assignments = reinterpret_cast<uint32_t*>(PyArray_DATA(
       reinterpret_cast<PyArrayObject*>(assignments_array)));
 
-  int result = kmeans_cuda(samples_size, static_cast<uint16_t>(features_size),
-                           clusters_size, verbosity, seed, samples, centroids,
-                           assignments);
+  int result = kmeans_cuda(
+      kmpp, samples_size, static_cast<uint16_t>(features_size), clusters_size,
+      verbosity, seed, samples, centroids, assignments);
   switch (result) {
     case kmcudaInvalidArguments:
       PyErr_SetString(PyExc_ValueError,

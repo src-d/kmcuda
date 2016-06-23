@@ -67,6 +67,11 @@ __global__ void kmeans_assign(float *samples, float *centroids,
       nearest = c;
     }
   }
+  if (nearest == UINT32_MAX) {
+    printf("CUDA kernel kmeans_assign: nearest neighbor search failed for"
+           "sample %" PRIu32, samples);
+    return;
+  }
   if (assignments[sample] != nearest) {
     assignments[sample] = nearest;
     atomicAdd(&changed, 1);
@@ -157,6 +162,11 @@ KMCUDAResult kmeans_cuda_internal(
     }
     if (!changed_) {
       break;
+    }
+    changed_ = 0;
+    if (cudaMemcpyToSymbol(changed, &changed_, sizeof(changed_))
+        != cudaSuccess) {
+      return kmcudaMemoryCopyError;
     }
     kmeans_sum<<<sblock, sgrid>>>(samples, centroids, assignments);
     kmeans_adjust<<<cblock, cgrid>>>(centroids, ccounts);

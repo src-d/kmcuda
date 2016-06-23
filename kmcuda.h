@@ -4,15 +4,20 @@
 #include <stdint.h>
 
 enum KMCUDAResult {
-  kmcudaSuccess,
+  kmcudaSuccess = 0,
   kmcudaInvalidArguments,
   kmcudaMemoryAllocationFailure,
   kmcudaRuntimeError,
   kmcudaMemoryCopyError
 };
 
+enum KMCUDAInitMethod {
+  kmcudaInitMethodRandom = 0,
+  kmcudaInitMethodPlusPlus
+};
+
 extern "C" {
-int kmeans_cuda(uint32_t samples_size, uint16_t features_size,
+int kmeans_cuda(bool kmpp, uint32_t samples_size, uint16_t features_size,
                 uint32_t clusters_size, int32_t verbosity, uint32_t seed,
                 const float *samples, float *centroids, uint32_t *assignments);
 }
