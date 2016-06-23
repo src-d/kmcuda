@@ -50,17 +50,18 @@ class pyobj : public pyobj_parent {
 };
 
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
-  uint32_t clusters_size, seed = static_cast<uint32_t>(time(NULL));
+  uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 0;
   int32_t verbosity = 0;
-  bool kmpp = false;
+  PyObject *kmpp = Py_False;
   PyObject *samples_obj;
   static const char *kwlist[] = {"samples", "clusters", "kmpp", "seed",
-                                 "verbosity", NULL};
+                                 "device", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-          args, kwargs, "OI|pIi", const_cast<char**>(kwlist),
-          &samples_obj, &clusters_size, &kmpp, &seed, &verbosity)) {
+      args, kwargs, "OI|O!IIi", const_cast<char**>(kwlist),
+      &samples_obj, &clusters_size, &PyBool_Type, &kmpp, &seed, &device,
+      &verbosity)) {
     return NULL;
   }
   if (clusters_size < 2) {
@@ -99,12 +100,15 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       reinterpret_cast<PyArrayObject*>(assignments_array)));
 
   int result = kmeans_cuda(
-      kmpp, samples_size, static_cast<uint16_t>(features_size), clusters_size,
-      verbosity, seed, samples, centroids, assignments);
+      kmpp == Py_True, samples_size, static_cast<uint16_t>(features_size),
+      clusters_size, verbosity, seed, device, samples, centroids, assignments);
   switch (result) {
     case kmcudaInvalidArguments:
       PyErr_SetString(PyExc_ValueError,
                       "Invalid arguments were passed to kmeans_cuda");
+      return NULL;
+    case kmcudaNoSuchDevice:
+      PyErr_SetString(PyExc_ValueError, "No such CUDA device exists");
       return NULL;
     case kmcudaMemoryAllocationFailure:
       PyErr_SetString(PyExc_MemoryError,

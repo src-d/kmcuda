@@ -1,18 +1,21 @@
 #include <stdio.h>
 #include <float.h>
 #include <inttypes.h>
+#include <vector_types.h>
+#include <bits/unique_ptr.h>
 #include "kmcuda.h"
 
 #define BLOCK_SIZE 1024
 
-__device__ float dist_sum;
 __device__ uint32_t changed;
 __constant__ uint32_t samples_size;
 __constant__ uint16_t features_size;
 __constant__ uint32_t clusters_size;
+__constant__ int shmem_size;
 
-__global__ void kmeans_plus_plus(uint32_t cc, float *samples,
-                                 float *centroids, float *dists) {
+__global__ void kmeans_plus_plus(
+    uint32_t cc, float *samples, float *centroids, float *dists,
+    float *dist_sums) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
     return;
@@ -37,11 +40,15 @@ __global__ void kmeans_plus_plus(uint32_t cc, float *samples,
   local_dists[threadIdx.x] = min_dist;
   __syncthreads();
   if (threadIdx.x == 0) {
-    float local_sum = 0;
-    for (int i = 0; i < blockDim.x; i++) {
-      local_sum += local_dists[i];
+    uint32_t end = blockDim.x;
+    if ((blockIdx.x + 1) * blockDim.x > samples_size) {
+      end = samples_size - blockIdx.x * blockDim.x;
     }
-    dist_sum += local_sum;
+    float block_sum = 0;
+    for (uint32_t i = 0; i < end; i++) {
+      block_sum += local_dists[i];
+    }
+    dist_sums[blockIdx.x] = block_sum;
   }
 }
 
@@ -79,26 +86,35 @@ __global__ void kmeans_assign(float *samples, float *centroids,
   atomicAdd(&ccounts[nearest], 1);
 }
 
-__global__ void kmeans_sum(float *samples, float *centroids,
-                           uint32_t *assignments) {
-  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= samples_size) {
-    return;
-  }
-  uint32_t soffset = sample * features_size;
-  uint32_t coffset = assignments[sample] * features_size;
-  for (int f = 0; f < features_size; f++) {
-    float myf = samples[soffset + f];
-    centroids[coffset + f] += myf;
-  }
-}
-
-__global__ void kmeans_adjust(float *centroids, uint32_t *ccounts) {
+__global__ void kmeans_adjust(float *samples, float *centroids,
+                              uint32_t *assignments, uint32_t *ccounts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= clusters_size) {
     return;
   }
   uint32_t coffset = c * features_size;
+  for (int f = 0; f < features_size; f++) {
+    centroids[coffset + f] = 0;
+  }
+  extern __shared__ uint32_t ass[];
+  for (uint32_t sbase = 0; sbase < samples_size; sbase += shmem_size) {
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      int pos = sbase;
+      for (int i = 0; i < shmem_size && sbase + i < samples_size; i++) {
+        ass[i] = assignments[pos + i];
+      }
+    }
+    __syncthreads();
+    for (int i = 0; i < shmem_size && sbase + i < samples_size; i++) {
+      if (ass[i] == c) {
+        uint32_t soffset = (sbase + i) * features_size;
+        for (int f = 0; f < features_size; f++) {
+          centroids[coffset + f] += samples[soffset + f];
+        }
+      }
+    }
+  }
   for (int f = 0; f < features_size; f++) {
     centroids[coffset + f] /= ccounts[c];
   }
@@ -108,7 +124,8 @@ __global__ void kmeans_adjust(float *centroids, uint32_t *ccounts) {
 extern "C" {
 
 KMCUDAResult kmeans_cuda_setup(uint32_t samples_size_, uint16_t features_size_,
-                               uint32_t clusters_size_) {
+                               uint32_t clusters_size_, uint32_t device,
+                               int32_t verbosity) {
   if (cudaMemcpyToSymbol(samples_size, &samples_size_, sizeof(samples_size))
       != cudaSuccess) {
     return kmcudaMemoryCopyError;
@@ -121,25 +138,51 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size_, uint16_t features_size_,
       != cudaSuccess) {
     return kmcudaMemoryCopyError;
   }
+  cudaDeviceProp props;
+  if (cudaGetDeviceProperties(&props, device) != cudaSuccess) {
+    return kmcudaRuntimeError;
+  }
+  int my_shmem_size = static_cast<int>(props.sharedMemPerBlock);
+  if (verbosity > 1) {
+    printf("GPU #%" PRIu32 " has %d bytes of shared memory per block\n",
+           device, my_shmem_size);
+  }
+  my_shmem_size /= sizeof(uint32_t);
+  if (cudaMemcpyToSymbol(shmem_size, &my_shmem_size, sizeof(my_shmem_size))
+      != cudaSuccess) {
+    return kmcudaMemoryCopyError;
+  }
   return kmcudaSuccess;
 }
 
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t cc, float *samples, float *centroids,
-    float *dists, float *dist_sum_) {
-  float zero = 0;
-  if (cudaMemcpyToSymbol(dist_sum, &zero, sizeof(zero)) != cudaSuccess) {
-    return kmcudaMemoryCopyError;
-  }
+    float *dists, float *dist_sum, float **dist_sums) {
   dim3 block(BLOCK_SIZE, 1, 1);
   dim3 grid(samples_size / block.x + 1, 1, 1);
+  if (*dist_sums == NULL) {
+    if (cudaMalloc(reinterpret_cast<void**>(dist_sums),
+                   grid.x * sizeof(float)) != cudaSuccess) {
+      return kmcudaMemoryAllocationFailure;
+    }
+  } else {
+    if (cudaMemset(*dist_sums, 0, grid.x * sizeof(float)) != cudaSuccess) {
+      return kmcudaRuntimeError;
+    }
+  }
   kmeans_plus_plus<<<grid, block, block.x * sizeof(float)>>>(
-      cc, samples, centroids, dists);
-  cudaDeviceSynchronize();
-  if (cudaMemcpyFromSymbol(dist_sum_, dist_sum, sizeof(float))
-      != cudaSuccess) {
+      cc, samples, centroids, dists, *dist_sums);
+  std::unique_ptr<float[]> host_dist_sums(new float[grid.x]);
+  if (cudaMemcpy(host_dist_sums.get(), *dist_sums, grid.x * sizeof(float),
+                 cudaMemcpyDeviceToHost) != cudaSuccess) {
     return kmcudaMemoryCopyError;
   }
+  float ds = 0;
+  #pragma omp simd reduction(+:ds)
+  for (uint32_t i = 0; i < block.x; i++) {
+    ds += host_dist_sums[i];
+  }
+  *dist_sum = ds;
   return kmcudaSuccess;
 }
 
@@ -150,6 +193,12 @@ KMCUDAResult kmeans_cuda_internal(
   dim3 sgrid(samples_size / sblock.x + 1, 1, 1);
   dim3 cblock(BLOCK_SIZE, 1, 1);
   dim3 cgrid(clusters_size / cblock.x + 1, 1, 1);
+  uint32_t my_shmem_size;
+  if (cudaMemcpyFromSymbol(&my_shmem_size, shmem_size, sizeof(my_shmem_size))
+      != cudaSuccess) {
+    return kmcudaMemoryCopyError;
+  }
+  my_shmem_size *= sizeof(uint32_t);
   for (int i = 1; ; i++) {
     kmeans_assign<<<sgrid, sblock>>>(samples, centroids, ccounts, assignments);
     uint32_t changed_ = 0;
@@ -168,8 +217,8 @@ KMCUDAResult kmeans_cuda_internal(
         != cudaSuccess) {
       return kmcudaMemoryCopyError;
     }
-    kmeans_sum<<<sblock, sgrid>>>(samples, centroids, assignments);
-    kmeans_adjust<<<cblock, cgrid>>>(centroids, ccounts);
+    kmeans_adjust<<<cblock, cgrid, my_shmem_size>>>(
+        samples, centroids, assignments, ccounts);
   }
   return kmcudaSuccess;
 }
