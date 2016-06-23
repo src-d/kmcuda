@@ -93,7 +93,7 @@ in row major format.
 **assignments** output array of cluster indices for each sample of size
 samples_size x 1.
 
-Returs KMCUDAResult (see `kmcuda.h`);
+Returns KMCUDAResult (see `kmcuda.h`);
 
 License
 -------
