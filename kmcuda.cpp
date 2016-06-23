@@ -6,6 +6,7 @@
 #include <cinttypes>
 #include <cfloat>
 #include <cmath>
+#include <cassert>
 #include <memory>
 
 #include <cuda_runtime_api.h>
@@ -15,17 +16,15 @@
 extern "C" {
 
 KMCUDAResult kmeans_cuda_plus_plus(
-    uint32_t samples_size, uint32_t cc, uint32_t block_size,
-    cudaTextureObject_t samples, float *centroids, float *dists,
-    float *distssum);
+    uint32_t samples_size, uint32_t cc, float *samples, float *centroids,
+    float *dists, float *distssum);
 
 KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
                                uint32_t clusters_size);
 
 KMCUDAResult kmeans_cuda_internal(
     uint32_t samples_size, uint32_t clusters_size, int32_t verbosity,
-    uint32_t block_size, cudaTextureObject_t samples, float *centroids,
-    uint32_t *ccounts, uint32_t *assignments);
+    float *samples, float *centroids, uint32_t *ccounts, uint32_t *assignments);
 
 }
 
@@ -46,24 +45,6 @@ static int check_args(uint32_t samples_size, uint16_t features_size,
     return kmcudaInvalidArguments;
   }
   return kmcudaSuccess;
-}
-
-static CudaTextureObject wrap_to_texture(cudaArray *arr, size_t size) {
-  cudaResourceDesc resDesc;
-  memset(&resDesc, 0, sizeof(resDesc));
-  resDesc.resType = cudaResourceTypeArray;
-  resDesc.res.array.array = cuArray;
-
-  cudaTextureDesc texDesc;
-  memset(&texDesc, 0, sizeof(texDesc));
-  texDesc.readMode = cudaReadModeElementType;
-
-  cudaTextureObject_t tex = 0;
-  auto result = cudaCreateTextureObject(&tex, &resDesc, &texDesc, NULL);
-  if (result != cudaSuccess) {
-    printf("cudaCreateTextureObject %s\n", cudaGetErrorString(result));
-  }
-  return CudaTextureObject(tex);
 }
 
 #if 0
@@ -123,9 +104,8 @@ static void init_centroids_cpu(uint32_t samples_size, uint16_t features_size,
 
 static KMCUDAResult init_centroids_gpu(
     uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
-    uint32_t seed, int32_t verbosity, uint32_t block_size,
-    cudaTextureObject_t samples, const float *host_samples, float *centroids,
-    void *dists) {
+    uint32_t seed, int32_t verbosity, float *samples, const float *host_samples,
+    float *centroids, void *dists) {
   if (verbosity > 0) {
     printf("Performing kmeans++... ");
     fflush(stdout);
@@ -138,14 +118,17 @@ static KMCUDAResult init_centroids_gpu(
     }
   std::unique_ptr<float[]> host_dists(new float[samples_size]);
   for (uint32_t i = 1; i < clusters_size; i++) {
-    if (verbosity > 1) {
+    if (verbosity > 1 || (verbosity > 0 && i % (clusters_size / 100) == 0)) {
       printf("\nstep %d", i);
+      fflush(stdout);
     }
     float dist_sum = 0;
-    auto result = kmeans_cuda_plus_plus(
-        samples_size, i, block_size, samples, centroids,
-        reinterpret_cast<float*>(dists), &dist_sum);
+    auto result = kmeans_cuda_plus_plus(samples_size, i, samples, centroids,
+                                        reinterpret_cast<float*>(dists), &dist_sum);
     if (result != kmcudaSuccess) {
+      if (verbosity > 1) {
+        printf("\nkmeans_cuda_plus_plus failed\n");
+      }
       return result;
     }
     if (cudaMemcpy(host_dists.get(), dists, samples_size * sizeof(float),
@@ -158,6 +141,7 @@ static KMCUDAResult init_centroids_gpu(
     for (j = 0; j < samples_size && dist_sum2 < choice; j++) {
       dist_sum2 += host_dists[j];
     }
+    assert(j > 0);
     if (cudaMemcpy(centroids + i * features_size,
                    host_samples + (j - 1) * features_size,
                    features_size * sizeof(float),
@@ -178,8 +162,7 @@ extern "C" {
 
 int kmeans_cuda(uint32_t samples_size, uint16_t features_size,
                 uint32_t clusters_size, int32_t verbosity, uint32_t seed,
-                uint32_t block_size, const float *samples, float *centroids,
-                uint32_t *assignments) {
+                const float *samples, float *centroids, uint32_t *assignments) {
   if (verbosity > 1) {
     printf("arguments: %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIi32 " %p %p %p\n",
            samples_size, features_size, clusters_size, verbosity, samples,
@@ -203,14 +186,6 @@ int kmeans_cuda(uint32_t samples_size, uint16_t features_size,
     return kmcudaMemoryCopyError;
   }
   unique_devptr device_samples_sentinel(device_samples);
-  CudaTextureObject samples_tex = wrap_to_texture(
-      device_samples, device_samples_size);
-  if (samples_tex == 0) {
-    if (verbosity > 0) {
-      printf("failed to create the texture for samples\n");
-    }
-    return kmcudaMemoryAllocationFailure;
-  }
   void *device_centroids;
   size_t centroids_size = clusters_size * features_size * sizeof(float);
   if (cudaMalloc(&device_centroids, centroids_size)
@@ -252,21 +227,34 @@ int kmeans_cuda(uint32_t samples_size, uint16_t features_size,
   }
   auto result = kmeans_cuda_setup(samples_size, features_size, clusters_size);
   if (result != kmcudaSuccess) {
+    if (verbosity > 1) {
+      printf("kmeans_cuda_setup failed: %s\n",
+             cudaGetErrorString(cudaGetLastError()));
+    }
     return result;
   }
   result = init_centroids_gpu(
-      samples_size, features_size, clusters_size, seed, verbosity, block_size,
-      samples_tex, samples, reinterpret_cast<float*>(device_centroids),
-      device_assignments);
+      samples_size, features_size, clusters_size, seed, verbosity,
+      reinterpret_cast<float*>(device_samples), samples,
+      reinterpret_cast<float*>(device_centroids), device_assignments);
   if (result != kmcudaSuccess) {
+    if (verbosity > 1) {
+      printf("\ninit_centroids_gpu failed: %s\n",
+             cudaGetErrorString(cudaGetLastError()));
+    }
     return result;
   }
   result = kmeans_cuda_internal(
-      samples_size, clusters_size, verbosity, block_size,
-      samples_tex, reinterpret_cast<float*>(device_centroids),
+      samples_size, clusters_size, verbosity,
+      reinterpret_cast<float*>(device_samples),
+      reinterpret_cast<float*>(device_centroids),
       reinterpret_cast<uint32_t*>(device_ccounts),
       reinterpret_cast<uint32_t*>(device_assignments));
   if (result != kmcudaSuccess) {
+    if (verbosity > 1) {
+      printf("kmeans_cuda_internal failed: %s\n",
+             cudaGetErrorString(cudaGetLastError()));
+    }
     return result;
   }
   if (cudaMemcpy(centroids, device_centroids, centroids_size,
