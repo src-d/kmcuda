@@ -127,13 +127,13 @@ static KMCUDAResult init_centroids_gpu(
   switch (method) {
     case kmcudaInitMethodRandom:
       if (verbosity > 0) {
-        printf("randomly picking initial centroids... ");
+        printf("randomly picking initial centroids...\n");
         fflush(stdout);
       }
       for (uint32_t c = 0; c < clusters_size; c++) {
         if ((c + 1) % 1000 == 0 || c == clusters_size - 1) {
           if (verbosity > 0) {
-            printf("centroid #%" PRIu32 "\n", c + 1);
+            printf("\rcentroid #%" PRIu32 "\n", c + 1);
           }
           cumemcpy(centroids + c * features_size,
                    samples + (rand() % samples_size) * features_size,
@@ -147,7 +147,7 @@ static KMCUDAResult init_centroids_gpu(
       break;
     case kmcudaInitMethodPlusPlus:
       if (verbosity > 0) {
-        printf("Performing kmeans++... ");
+        printf("Performing kmeans++...\n");
         fflush(stdout);
       }
       cumemcpy(centroids, samples + (rand() % samples_size) * features_size,
@@ -158,7 +158,7 @@ static KMCUDAResult init_centroids_gpu(
       for (uint32_t i = 1; i < clusters_size; i++) {
         if (verbosity > 1 || (verbosity > 0 && (
               clusters_size < 100 || i % (clusters_size / 100) == 0))) {
-          printf("\nstep %d", i);
+          printf("\rstep %d", i);
           fflush(stdout);
         }
         float dist_sum = 0;
@@ -173,25 +173,48 @@ static KMCUDAResult init_centroids_gpu(
         }
         cumemcpy(host_dists.get(), dists, samples_size * sizeof(float),
                  cudaMemcpyDeviceToHost);
-        double choice = ((rand() + .0) / RAND_MAX) * dist_sum;
-        double dist_sum2 = 0;
+        double choice = ((rand() + .0) / RAND_MAX);
+        uint32_t choice_approx = choice * samples_size;
+        double choice_sum = choice * dist_sum;
         uint32_t j;
-        for (j = 0; j < samples_size && dist_sum2 < choice; j++) {
-          dist_sum2 += host_dists[j];
+        {
+          double dist_sum2 = 0;
+          for (j = 0; j < samples_size && dist_sum2 < choice_sum; j++) {
+            dist_sum2 += host_dists[j];
+          }
+        }
+        if (choice_approx < 100) {
+          double dist_sum2 = 0;
+          for (j = 0; j < samples_size && dist_sum2 < choice_sum; j++) {
+            dist_sum2 += host_dists[j];
+          }
+        } else {
+          double dist_sum2 = 0;
+          #pragma omp simd reduction(+:dist_sum2)
+          for (uint32_t t = 0; t < choice_approx; t++) {
+            dist_sum2 += host_dists[t];
+          }
+          if (dist_sum2 < choice_sum) {
+            for (j = choice_approx; j < samples_size && dist_sum2 < choice_sum; j++) {
+              dist_sum2 += host_dists[j];
+            }
+          } else {
+            for (j = choice_approx; j > 1 && dist_sum2 >= choice_sum; j--) {
+              dist_sum2 -= host_dists[j];
+            }
+            j++;
+          }
         }
         assert(j > 0);
-        cumemcpy(centroids + i * features_size,
-                 samples + (j - 1) * features_size,
-                 ssize, cudaMemcpyDeviceToDevice);
+        cumemcpy_async(centroids + i * features_size,
+                       samples + (j - 1) * features_size,
+                       ssize, cudaMemcpyDeviceToDevice);
       }
       break;
   }
 
   if (verbosity > 0) {
-    if (verbosity > 0) {
-      printf("\n");
-    }
-    printf("done\n");
+    printf("\rdone        \n");
   }
   return kmcudaSuccess;
 }
