@@ -60,9 +60,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fO!IIi", const_cast<char**>(kwlist),
-      &samples_obj, &clusters_size, &tolerance, &PyBool_Type, &kmpp, &seed,
-      &device, &verbosity)) {
+      args, kwargs, "OI|fO!fIIi", const_cast<char**>(kwlist),
+      &samples_obj, &clusters_size, &tolerance, &PyBool_Type, &kmpp, &yinyang_t,
+      &seed, &device, &verbosity)) {
     return NULL;
   }
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {

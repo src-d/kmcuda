@@ -12,6 +12,11 @@ enum KMCUDAResult {
   kmcudaMemoryCopyError
 };
 
+enum KMCUDAInitMethod {
+  kmcudaInitMethodRandom = 0,
+  kmcudaInitMethodPlusPlus
+};
+
 extern "C" {
 /// @brief Performs K-means clustering on GPU / CUDA.
 /// @param kmpp indicates whether to do kmeans++ initialization. If false,

@@ -13,11 +13,6 @@
 
 #include "wrappers.h"
 
-enum KMCUDAInitMethod {
-  kmcudaInitMethodRandom = 0,
-  kmcudaInitMethodPlusPlus
-};
-
 
 extern "C" {
 
@@ -29,9 +24,9 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
                                uint32_t clusters_size, uint32_t yy_groups_size,
                                uint32_t device, int32_t verbosity);
 
-KMCUDAResult kmeans_cuda_internal(
-    float tolerance, uint32_t yinyang_groups, uint32_t samples_size,
-    uint32_t clusters_size, uint16_t features_size, int32_t verbosity,
+KMCUDAResult kmeans_cuda_yy(
+    float tolerance, uint32_t yinyang_groups, uint32_t samples_size_,
+    uint32_t clusters_size_, uint16_t features_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts,
     uint32_t *assignments_prev, uint32_t *assignments,
     uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy);
@@ -73,10 +68,23 @@ static int check_args(
   return kmcudaSuccess;
 }
 
-static KMCUDAResult init_centroids(
+static KMCUDAResult print_memory_stats() {
+  size_t free_bytes, total_bytes;
+  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+    return kmcudaRuntimeError;
+  }
+  printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
+         total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
+         free_bytes, total_bytes);
+  return kmcudaSuccess;
+}
+
+extern "C" {
+
+KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, int32_t verbosity, float *samples,
-    float *centroids, void *dists) {
+    void *dists, float *centroids) {
   uint32_t ssize = features_size * sizeof(float);
   srand(seed);
   switch (method) {
@@ -126,6 +134,7 @@ static KMCUDAResult init_centroids(
           }
           return result;
         }
+        assert(dist_sum == dist_sum);
         cumemcpy(host_dists.get(), dists, samples_size * sizeof(float),
                  cudaMemcpyDeviceToHost);
         double choice = ((rand() + .0) / RAND_MAX);
@@ -173,19 +182,6 @@ static KMCUDAResult init_centroids(
   }
   return kmcudaSuccess;
 }
-
-static KMCUDAResult print_memory_stats() {
-  size_t free_bytes, total_bytes;
-  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-    return kmcudaRuntimeError;
-  }
-  printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
-         total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
-         free_bytes, total_bytes);
-  return kmcudaSuccess;
-}
-
-extern "C" {
 
 int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
                 uint16_t features_size, uint32_t clusters_size, uint32_t seed,
@@ -309,18 +305,18 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
     }
     return result;
   }
-  result = init_centroids(
+  result = kmeans_init_centroids(
       static_cast<KMCUDAInitMethod>(kmpp), samples_size, features_size,
       clusters_size, seed, verbosity, reinterpret_cast<float*>(device_samples),
-      reinterpret_cast<float*>(device_centroids), device_assignments);
+      device_assignments, reinterpret_cast<float*>(device_centroids));
   if (result != kmcudaSuccess) {
     if (verbosity > 1) {
-      printf("\ninit_centroids_gpu failed: %s\n",
+      printf("kmeans_init_centroids failed: %s\n",
              cudaGetErrorString(cudaGetLastError()));
     }
     return result;
   }
-  result = kmeans_cuda_internal(
+  result = kmeans_cuda_yy(
       tolerance, yinyang_groups, samples_size, clusters_size, features_size, verbosity,
       reinterpret_cast<float*>(device_samples),
       reinterpret_cast<float*>(device_centroids),
