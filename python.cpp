@@ -65,8 +65,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       &device, &verbosity)) {
     return NULL;
   }
-  if (clusters_size < 2) {
-    PyErr_SetString(PyExc_ValueError, "\"clusters\" must be greater than 1");
+  if (clusters_size < 2 || clusters_size == UINT32_MAX) {
+    PyErr_SetString(PyExc_ValueError, "\"clusters\" must be greater than 1 and "
+                                      "less than (1 << 32) - 1");
     return NULL;
   }
   pyobj samples_array(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
