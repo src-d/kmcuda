@@ -73,6 +73,8 @@ int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
 **kmpp** indicates whether to do kmeans++ initialization. If false,
 ordinary random centroids will be picked.
 
+**tolerance** if the number of reassignments drop below this ratio, stop.
+
 **samples_size** number of samples.
 
 **features_size** number of features.

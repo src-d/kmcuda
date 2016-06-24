@@ -26,13 +26,15 @@ KMCUDAResult kmeans_cuda_plus_plus(
     float *dists, float *distssum, float **dev_sums);
 
 KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
-                               uint32_t clusters_size, uint32_t device,
-                               int32_t verbosity);
+                               uint32_t clusters_size, uint32_t yy_groups_size,
+                               uint32_t device, int32_t verbosity);
 
 KMCUDAResult kmeans_cuda_internal(
-    float tolerance, uint32_t samples_size, uint32_t clusters_size,
-    uint16_t features_size, int32_t verbosity, float *samples, float *centroids,
-    uint32_t *ccounts, uint32_t *assignments_prev, uint32_t *assignments);
+    float tolerance, uint32_t yinyang_groups, uint32_t samples_size,
+    uint32_t clusters_size, uint16_t features_size, int32_t verbosity,
+    float *samples, float *centroids, uint32_t *ccounts,
+    uint32_t *assignments_prev, uint32_t *assignments,
+    uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy);
 
 }
 
@@ -46,9 +48,10 @@ do { if (cudaMemcpyAsync(dst, src, size, flag) != cudaSuccess) { \
   return kmcudaMemoryCopyError; \
 } } while(false)
 
-static int check_args(uint32_t samples_size, uint16_t features_size,
-                      uint32_t clusters_size, const float *samples,
-                      float *centroids, uint32_t *assignments) {
+static int check_args(
+    float tolerance, float yinyang_t, uint32_t samples_size, uint16_t features_size,
+    uint32_t clusters_size, const float *samples, float *centroids,
+    uint32_t *assignments) {
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
     return kmcudaInvalidArguments;
   }
@@ -59,6 +62,12 @@ static int check_args(uint32_t samples_size, uint16_t features_size,
     return kmcudaInvalidArguments;
   }
   if (samples == nullptr || centroids == nullptr || assignments == nullptr) {
+    return kmcudaInvalidArguments;
+  }
+  if (tolerance < 0 || tolerance > 1) {
+    return kmcudaInvalidArguments;
+  }
+  if (yinyang_t < 0 || yinyang_t > 0.5) {
     return kmcudaInvalidArguments;
   }
   return kmcudaSuccess;
@@ -165,20 +174,32 @@ static KMCUDAResult init_centroids(
   return kmcudaSuccess;
 }
 
+static KMCUDAResult print_memory_stats() {
+  size_t free_bytes, total_bytes;
+  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+    return kmcudaRuntimeError;
+  }
+  printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
+         total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
+         free_bytes, total_bytes);
+  return kmcudaSuccess;
+}
+
 extern "C" {
 
-int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
+int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
                 uint16_t features_size, uint32_t clusters_size, uint32_t seed,
                 uint32_t device, int32_t verbosity, const float *samples,
                 float *centroids, uint32_t *assignments) {
   if (verbosity > 1) {
-    printf("arguments: %d %.3f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
+    printf("arguments: %d %.3f %.2f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
            " %" PRIu32 " %" PRIi32 " %p %p %p\n",
-           kmpp, tolerance, samples_size, features_size, clusters_size,
+           kmpp, tolerance, yinyang_t, samples_size, features_size, clusters_size,
            seed, device, verbosity, samples, centroids, assignments);
   }
-  auto check_result = check_args(samples_size, features_size, clusters_size,
-                                 samples, centroids, assignments);
+  auto check_result = check_args(
+      tolerance, yinyang_t, samples_size, features_size, clusters_size,
+      samples, centroids, assignments);
   if (check_result != kmcudaSuccess) {
     return check_result;
   }
@@ -241,17 +262,46 @@ int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
   }
   unique_devptr device_ccounts_sentinel(device_ccounts);
 
-  if (verbosity > 1) {
-    size_t free_bytes, total_bytes;
-    if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-      return kmcudaRuntimeError;
+  uint32_t yinyang_groups = yinyang_t * clusters_size;
+  void *device_assignments_yy = NULL, *device_bounds_yy = NULL,
+      *device_drifts_yy = NULL;
+  if (yinyang_groups >= 1) {
+    size_t yya_size = clusters_size * sizeof(uint32_t);
+    if (cudaMalloc(&device_assignments_yy, yya_size) != cudaSuccess) {
+      if (verbosity > 0) {
+        printf("failed to allocate %zu bytes for yinyang assignments\n", yya_size);
+      }
+      return kmcudaMemoryAllocationFailure;
     }
-    printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
-           total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
-           free_bytes, total_bytes);
+
+    size_t yyb_size = samples_size * (yinyang_groups + 1) * sizeof(float);
+    if (cudaMalloc(&device_bounds_yy, yyb_size) != cudaSuccess) {
+      if (verbosity > 0) {
+        printf("failed to allocate %zu bytes for yinyang bounds\n", yyb_size);
+      }
+      return kmcudaMemoryAllocationFailure;
+    }
+
+    size_t yyd_size = centroids_size + clusters_size * sizeof(float);
+    if (cudaMalloc(&device_drifts_yy, yyd_size) != cudaSuccess) {
+      if (verbosity > 0) {
+        printf("failed to allocate %zu bytes for yinyang drifts\n", yyd_size);
+      }
+      return kmcudaMemoryAllocationFailure;
+    }
+  }
+  unique_devptr device_assignments_yinyang_sentinel(device_assignments_yy);
+  unique_devptr device_bounds_yinyang_sentinel(device_bounds_yy);
+  unique_devptr device_drifts_yinyang_sentinel(device_drifts_yy);
+
+  if (verbosity > 1) {
+    auto pmr = print_memory_stats();
+    if (pmr != kmcudaSuccess) {
+      return pmr;
+    }
   }
   auto result = kmeans_cuda_setup(samples_size, features_size, clusters_size,
-                                  device, verbosity);
+                                  yinyang_groups, device, verbosity);
   if (result != kmcudaSuccess) {
     if (verbosity > 1) {
       printf("kmeans_cuda_setup failed: %s\n",
@@ -271,12 +321,15 @@ int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
     return result;
   }
   result = kmeans_cuda_internal(
-      tolerance, samples_size, clusters_size, features_size, verbosity,
+      tolerance, yinyang_groups, samples_size, clusters_size, features_size, verbosity,
       reinterpret_cast<float*>(device_samples),
       reinterpret_cast<float*>(device_centroids),
       reinterpret_cast<uint32_t*>(device_ccounts),
       reinterpret_cast<uint32_t*>(device_assignments_prev),
-      reinterpret_cast<uint32_t*>(device_assignments));
+      reinterpret_cast<uint32_t*>(device_assignments),
+      reinterpret_cast<uint32_t*>(device_assignments_yy),
+      reinterpret_cast<float*>(device_bounds_yy),
+      reinterpret_cast<float*>(device_drifts_yy));
   if (result != kmcudaSuccess) {
     if (verbosity > 1) {
       printf("kmeans_cuda_internal failed: %s\n",
