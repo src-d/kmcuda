@@ -514,6 +514,9 @@ KMCUDAResult kmeans_cuda_yy(
       != cudaSuccess) {
     return kmcudaMemoryCopyError;
   }
+  if (verbosity > 0) {
+    printf("Yinyang calculation starts\n");
+  }
   dim3 sblock(BLOCK_SIZE, 1, 1);
   dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
   dim3 cblock(BLOCK_SIZE, 1, 1);
@@ -535,8 +538,8 @@ KMCUDAResult kmeans_cuda_yy(
   auto max_drifts_ptr = max_drifts.get();
   kmeans_yy_init<<<sgrid, sblock>>>(
       samples, centroids, assignments_prev, assignments, assignments_yy, bounds_yy);
-  while (true) {
-    int status = check_changed(1, tolerance, samples_size_, verbosity);
+  for (int iter = 1; ; iter++) {
+    int status = check_changed(iter, tolerance, samples_size_, verbosity);
     if (status < kmcudaSuccess) {
       return kmcudaSuccess;
     }
@@ -561,12 +564,12 @@ KMCUDAResult kmeans_cuda_yy(
     }
     for (uint32_t c = 0; c < clusters_size_; c++) {
       uint32_t cg = groups[c];
-      float d = drifts[centroids_size + c];
+      float d = drifts[c];
       if (max_drifts_ptr[cg] > d) {
         max_drifts_ptr[cg] = d;
       }
     }
-    if (cudaMemcpyAsync(max_drifts_ptr, drifts_yy, yinyang_groups * sizeof(float),
+    if (cudaMemcpyAsync(drifts_yy, max_drifts_ptr, yinyang_groups * sizeof(float),
                         cudaMemcpyHostToDevice) != cudaSuccess) {
       return kmcudaMemoryCopyError;
     }
