@@ -5,7 +5,7 @@ find_package(CUDA QUIET REQUIRED)
 find_package(PythonLibs 3 REQUIRED)
 
 #set(CMAKE_VERBOSE_MAKEFILE on)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror -std=c++11 -D_FORCE_INLINES ${OpenMP_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -Wall -Werror -std=c++11 -D_FORCE_INLINES ${OpenMP_CXX_FLAGS}")
 set(SOURCE_FILES kmcuda.cpp kmcuda.h wrappers.h python.cpp kernel.cu)
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(NVCC_FLAGS "-G -g")
