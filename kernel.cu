@@ -198,10 +198,8 @@ __global__ void kmeans_yy_init(
   }
   uint32_t ass = assignments[sample];
   assignments_prev[sample] = ass;
-  if (ass != nearest) {
-    assignments[sample] = nearest;
-    atomicAdd(&changed, 1);
-  }
+  assignments[sample] = nearest;
+  atomicAdd(&changed, 1);
 }
 
 __global__ void kmeans_calc_drifts_yy(
@@ -231,7 +229,8 @@ __global__ void kmeans_filter_assign_yy(
   uint32_t cluster = assignments[sample];
   assignments_prev[sample] = cluster;
   float upper_bound = bounds[boffset];
-  float cluster_drift = drifts[clusters_size * features_size + cluster];
+  uint32_t doffset = clusters_size * features_size;
+  float cluster_drift = drifts[doffset + cluster];
   upper_bound += cluster_drift;
   boffset++;
   float min_lower_bound = FLT_MAX;
@@ -243,6 +242,7 @@ __global__ void kmeans_filter_assign_yy(
     }
   }
   boffset--;
+  // group filter try #1
   if (min_lower_bound >= upper_bound) {
     bounds[boffset] = upper_bound;
     return;
@@ -255,25 +255,27 @@ __global__ void kmeans_filter_assign_yy(
     upper_bound += d * d;
   }
   upper_bound = sqrt(upper_bound);
+  // group filter try #2
   if (min_lower_bound >= upper_bound) {
     bounds[boffset] = upper_bound;
     return;
   }
 
   // D'oh!
-
   boffset++;
-  float min_dist = FLT_MAX;
-  uint32_t nearest = UINT32_MAX, second_nearest = UINT32_MAX;
+  float min_dist = FLT_MAX, second_min_dist = FLT_MAX;
+  uint32_t nearest = UINT32_MAX;
   for (uint32_t c = 0; c < clusters_size; c++) {
     uint32_t group = groups[c];
     float lower_bound = bounds[boffset + group];
-    if (lower_bound >= upper_bound) {
-      continue;
-    }
-    lower_bound += drifts[group] - cluster_drift;
-    if (second_nearest < lower_bound) {
-      continue;
+    if (c != cluster) {
+      if (lower_bound >= upper_bound) {
+        continue;
+      }
+      lower_bound += drifts[group] - drifts[doffset + c];
+      if (second_min_dist < lower_bound) {
+        continue;
+      }
     }
 
     float dist = 0;
@@ -284,9 +286,11 @@ __global__ void kmeans_filter_assign_yy(
     }
     dist = sqrt(dist);
     if (dist < min_dist) {
-      second_nearest = min_dist;
+      second_min_dist = min_dist;
       min_dist = dist;
       nearest = c;
+    } else if (dist < second_min_dist) {
+      second_min_dist = dist;
     }
   }
   if (nearest == UINT32_MAX) {
@@ -294,31 +298,14 @@ __global__ void kmeans_filter_assign_yy(
            "sample %" PRIu32, samples);
     return;
   }
-
+  if (second_min_dist != FLT_MAX) {
+    bounds[boffset + groups[nearest]] = second_min_dist;
+  }
+  bounds[boffset - 1] = min_dist;
   if (cluster != nearest) {
-    bounds[boffset - 1] = min_dist;
+    printf("%u: %u -> %u\n", sample, cluster, nearest);
     assignments[sample] = nearest;
     atomicAdd(&changed, 1);
-
-    uint32_t nearest_group = groups[nearest];
-    min_dist = FLT_MAX;
-    for (uint32_t c = 0; c < clusters_size; c++) {
-      if (c == nearest || groups[c] != nearest_group) {
-        continue;
-      }
-      float dist = 0;
-      uint32_t coffset = c * features_size;
-      for (int f = 0; f < features_size; f++) {
-        float myf = samples[soffset + f];
-        float d = myf - centroids[coffset + f];
-        dist += d * d;
-      }
-      dist = sqrt(dist);
-      if (dist < min_dist) {
-        min_dist = dist;
-      }
-    }
-    bounds[boffset + nearest_group] = min_dist;
   }
 }
 
@@ -560,12 +547,12 @@ KMCUDAResult kmeans_cuda_yy(
     }
     #pragma omp for simd
     for (uint32_t i = 0; i < yinyang_groups; i++) {
-      max_drifts_ptr[i] = FLT_MAX;
+      max_drifts_ptr[i] = FLT_MIN;
     }
     for (uint32_t c = 0; c < clusters_size_; c++) {
       uint32_t cg = groups[c];
       float d = drifts[c];
-      if (max_drifts_ptr[cg] > d) {
+      if (max_drifts_ptr[cg] < d) {
         max_drifts_ptr[cg] = d;
       }
     }
