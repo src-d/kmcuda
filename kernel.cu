@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cfloat>
 #include <cinttypes>
+#include <cinttypes>
 #include <memory>
 #include "kmcuda.h"
 
@@ -263,19 +264,23 @@ __global__ void kmeans_filter_assign_yy(
 
   // D'oh!
   boffset++;
-  float min_dist = FLT_MAX, second_min_dist = FLT_MAX;
-  uint32_t nearest = UINT32_MAX;
+  float min_dist = upper_bound, second_min_dist = FLT_MAX;
+  uint32_t nearest = cluster;
   for (uint32_t c = 0; c < clusters_size; c++) {
+    if (c == cluster) {
+      continue;
+    }
     uint32_t group = groups[c];
     float lower_bound = bounds[boffset + group];
-    if (c != cluster) {
-      if (lower_bound >= upper_bound) {
-        continue;
+    if (lower_bound >= upper_bound) {
+      if (lower_bound < second_min_dist) {
+        second_min_dist = lower_bound;
       }
-      lower_bound += drifts[group] - drifts[doffset + c];
-      if (second_min_dist < lower_bound) {
-        continue;
-      }
+      continue;
+    }
+    lower_bound += drifts[group] - drifts[doffset + c];
+    if (second_min_dist < lower_bound) {
+      continue;
     }
 
     float dist = 0;
@@ -293,17 +298,17 @@ __global__ void kmeans_filter_assign_yy(
       second_min_dist = dist;
     }
   }
-  if (nearest == UINT32_MAX) {
-    printf("CUDA kernel kmeans_assign: nearest neighbor search failed for"
-           "sample %" PRIu32, samples);
-    return;
-  }
-  if (second_min_dist != FLT_MAX) {
-    bounds[boffset + groups[nearest]] = second_min_dist;
+  uint32_t nearest_group = groups[nearest];
+  uint32_t previous_group = groups[cluster];
+  bounds[boffset + nearest_group] = second_min_dist;
+  if (nearest_group != previous_group) {
+    float pb = bounds[boffset + previous_group];
+    if (pb > upper_bound) {
+      bounds[boffset + previous_group] = upper_bound;
+    }
   }
   bounds[boffset - 1] = min_dist;
   if (cluster != nearest) {
-    printf("%u: %u -> %u\n", sample, cluster, nearest);
     assignments[sample] = nearest;
     atomicAdd(&changed, 1);
   }
