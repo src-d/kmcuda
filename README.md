@@ -1,18 +1,24 @@
-K-means using NVIDIA CUDA
-=========================
+"Yinyang" K-means using NVIDIA CUDA
+===================================
+
+This implementation is based on ["Yinyang K-Means: A Drop-In Replacement
+of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
+article. While it introduces some overhead and many conditional clauses
+which are bad for CUDA, it still shows 2x speedup against the Lloyd
+algorithm.
 
 The major difference between this project and others is that it is
 optimized for low memory consumption and large number of clusters. E.g.,
 kmcuda can sort 3M samples into 30000 clusters (if you have several days
-and 6 GB of GPU memory).
+and 12 GB of GPU memory). Yinyang can be turned off to save GPU memory but
+the slow Lloyd will be used then.
 
-Currently, the algorithm is a really brute-force approach which seems to
-be the only one working at scale. kmeans++ initialization is supported,
-though it takes a lot of time to finish.
+The code has been thoroughly tested to yield bit-to-bit identical
+results from Yinyang and Lloyd.
 
-This project is a library which exports the single function defined in
-`wrappers.h`, `kmeans_cuda`. It has a built-in Python3 native extension
-support, so you can `from libKMCUDA import kmeans_cuda`.
+Technically, this project is a library which exports the single function
+defined in `wrappers.h`, `kmeans_cuda`. It has a built-in Python3 native
+extension support, so you can `from libKMCUDA import kmeans_cuda`.
 
 Building
 --------
@@ -45,8 +51,8 @@ You should see something like this:
 Python API
 ----------
 ```python
-def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False, seed=time(),
-                device=0, verbosity=0)
+def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False,
+                yinyang_t=0.1, seed=time(), device=0, verbosity=0)
 ```
 **samples** numpy array of shape [number of samples, number of features]
 
@@ -55,6 +61,8 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False, seed=time(),
 **tolerance** if the relative number of reassignments drops below this value, stop
 
 **kmpp** boolean, indicates whether to do kmeans++ initialization
+
+**yinyang_t** the relative number of cluster groups, usually 0.1.
 
 **seed** random generator seed for reproducible results
 
@@ -65,7 +73,7 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False, seed=time(),
 C API
 -----
 ```C
-int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
+int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
                 uint16_t features_size, uint32_t clusters_size, uint32_t seed,
                 uint32_t device, int32_t verbosity, const float *samples,
                 float *centroids, uint32_t *assignments)
@@ -74,6 +82,8 @@ int kmeans_cuda(bool kmpp, float tolerance, uint32_t samples_size,
 ordinary random centroids will be picked.
 
 **tolerance** if the number of reassignments drop below this ratio, stop.
+
+**yinyang_t** the relative number of cluster groups, usually 0.1.
 
 **samples_size** number of samples.
 

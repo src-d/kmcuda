@@ -3,11 +3,12 @@
 #include <cfloat>
 #include <cinttypes>
 #include <cinttypes>
+#include <algorithm>
 #include <memory>
 #include "kmcuda.h"
 
 #define BLOCK_SIZE 1024
-#define YINYANG_GROUP_TOLERANCE 0.05
+#define YINYANG_GROUP_TOLERANCE 0.025
 
 #define CUCH(cuda_call, ret) \
 do { \
@@ -482,25 +483,25 @@ KMCUDAResult kmeans_cuda_yy(
   CUCH(cudaMemcpyToSymbol(clusters_size, &clusters_size_, sizeof(clusters_size_)),
        kmcudaMemoryCopyError);
   if (verbosity > 0) {
-    printf("Yinyang calculation starts\n");
+    printf("Initializing Yinyang bounds...\n");
   }
-  dim3 sblock(BLOCK_SIZE, 1, 1);
-  dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
-  dim3 cblock(BLOCK_SIZE, 1, 1);
-  dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
-  uint32_t centroids_size = clusters_size_ * features_size;
+  std::unique_ptr<uint32_t[]> groups(new uint32_t[clusters_size_]);
+  CUCH(cudaMemcpyAsync(groups.get(), assignments_yy, clusters_size_ * sizeof(uint32_t),
+                       cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
   uint32_t my_shmem_size;
   auto pr = prepare_mem(ccounts, assignments, samples_size_, clusters_size_,
                         &my_shmem_size);
   if (pr != kmcudaSuccess) {
     return pr;
   }
-  std::unique_ptr<uint32_t[]> groups(new uint32_t[clusters_size_]);
-  CUCH(cudaMemcpyAsync(groups.get(), assignments_yy, clusters_size_ * sizeof(uint32_t),
-                       cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
+  uint32_t centroids_size = clusters_size_ * features_size;
   std::unique_ptr<float[]> drifts(new float[clusters_size_]);
   std::unique_ptr<float[]> max_drifts(new float[yinyang_groups]);
   auto max_drifts_ptr = max_drifts.get();
+  dim3 sblock(BLOCK_SIZE, 1, 1);
+  dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
+  dim3 cblock(BLOCK_SIZE, 1, 1);
+  dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
   kmeans_yy_init<<<sgrid, sblock>>>(
       samples, centroids, assignments_prev, assignments, assignments_yy, bounds_yy);
   for (int iter = 1; ; iter++) {

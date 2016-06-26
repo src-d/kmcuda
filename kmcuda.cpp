@@ -178,7 +178,7 @@ KMCUDAResult kmeans_init_centroids(
   }
 
   if (verbosity > 0) {
-    printf("\rdone        \n");
+    printf("\rdone            \n");
   }
   return kmcudaSuccess;
 }
