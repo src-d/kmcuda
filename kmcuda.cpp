@@ -204,7 +204,11 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
   }
 
   void *device_samples;
-  size_t device_samples_size = samples_size * features_size * sizeof(float);
+  size_t device_samples_size = samples_size;
+  device_samples_size *= features_size * sizeof(float);
+  if (verbosity > 1) {
+    printf("samples: %zu\n", device_samples_size);
+  }
   if (cudaMalloc(&device_samples, device_samples_size) != cudaSuccess) {
     if (verbosity > 0) {
       printf("failed to allocate %zu bytes for samples\n", device_samples_size);
@@ -216,6 +220,9 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
 
   void *device_centroids;
   size_t centroids_size = clusters_size * features_size * sizeof(float);
+  if (verbosity > 1) {
+    printf("centroids: %zu\n", centroids_size);
+  }
   if (cudaMalloc(&device_centroids, centroids_size)
       != cudaSuccess) {
     if (verbosity > 0) {
@@ -227,6 +234,9 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
 
   void *device_assignments;
   size_t assignments_size = samples_size * sizeof(uint32_t);
+  if (verbosity > 1) {
+    printf("assignments: %zu\n", assignments_size);
+  }
   if (cudaMalloc(&device_assignments, assignments_size)
       != cudaSuccess) {
     if (verbosity > 0) {
@@ -237,6 +247,9 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
   unique_devptr device_assignments_sentinel(device_assignments);
 
   void *device_assignments_prev;
+  if (verbosity > 1) {
+    printf("assignments_prev: %zu\n", assignments_size);
+  }
   if (cudaMalloc(&device_assignments_prev, assignments_size)
       != cudaSuccess) {
     if (verbosity > 0) {
@@ -249,6 +262,9 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
 
   void *device_ccounts;
   size_t ccounts_size = clusters_size * sizeof(uint32_t);
+  if (verbosity > 1) {
+    printf("ccounts: %zu\n", ccounts_size);
+  }
   if (cudaMalloc(&device_ccounts, ccounts_size)
       != cudaSuccess) {
     if (verbosity > 0) {
@@ -259,10 +275,16 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
   unique_devptr device_ccounts_sentinel(device_ccounts);
 
   uint32_t yinyang_groups = yinyang_t * clusters_size;
+  if (verbosity > 1) {
+    printf("yinyang groups: %" PRIu32 "\n", yinyang_groups);
+  }
   void *device_assignments_yy = NULL, *device_bounds_yy = NULL,
       *device_drifts_yy = NULL;
   if (yinyang_groups >= 1) {
     size_t yya_size = clusters_size * sizeof(uint32_t);
+    if (verbosity > 1) {
+      printf("yinyang assignments: %zu\n", yya_size);
+    }
     if (cudaMalloc(&device_assignments_yy, yya_size) != cudaSuccess) {
       if (verbosity > 0) {
         printf("failed to allocate %zu bytes for yinyang assignments\n", yya_size);
@@ -270,7 +292,11 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
       return kmcudaMemoryAllocationFailure;
     }
 
-    size_t yyb_size = samples_size * (yinyang_groups + 1) * sizeof(float);
+    size_t yyb_size = samples_size;
+    yyb_size *= (yinyang_groups + 1) * sizeof(float);
+    if (verbosity > 1) {
+      printf("yinyang bounds: %zu\n", yyb_size);
+    }
     if (cudaMalloc(&device_bounds_yy, yyb_size) != cudaSuccess) {
       if (verbosity > 0) {
         printf("failed to allocate %zu bytes for yinyang bounds\n", yyb_size);
@@ -279,6 +305,9 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
     }
 
     size_t yyd_size = centroids_size + clusters_size * sizeof(float);
+    if (verbosity > 1) {
+      printf("yinyang drifts: %zu\n", yyd_size);
+    }
     if (cudaMalloc(&device_drifts_yy, yyd_size) != cudaSuccess) {
       if (verbosity > 0) {
         printf("failed to allocate %zu bytes for yinyang drifts\n", yyd_size);

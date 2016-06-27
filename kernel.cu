@@ -33,7 +33,8 @@ __global__ void kmeans_plus_plus(
   if (sample >= samples_size) {
     return;
   }
-  uint32_t soffset = sample * features_size;
+  uint64_t soffset = sample;
+  soffset *= features_size;
   extern __shared__ float local_dists[];
   float dist = 0;
   uint32_t coffset = (cc - 1) * features_size;
@@ -71,7 +72,8 @@ __global__ void kmeans_assign_lloyd(float *samples, float *centroids,
   if (sample >= samples_size) {
     return;
   }
-  uint32_t soffset = sample * features_size;
+  uint64_t soffset = sample;
+  soffset *= features_size;
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
   for (uint32_t c = 0; c < clusters_size; c++) {
@@ -136,7 +138,8 @@ __global__ void kmeans_adjust(
         my_count++;
       }
       if (sign != 0) {
-        uint32_t soffset = (sbase + i) * features_size;
+        uint64_t soffset = sbase + i;
+        soffset *= features_size;
         for (int f = 0; f < features_size; f++) {
           centroids[coffset + f] += samples[soffset + f] * sign;
         }
@@ -156,12 +159,14 @@ __global__ void kmeans_yy_init(
   if (sample >= samples_size) {
     return;
   }
-  uint32_t boffset = sample * (yy_groups_size + 1);
+  uint64_t boffset = sample;
+  boffset *= yy_groups_size + 1;
   for (uint32_t i = 0; i < yy_groups_size + 1; i++) {
     bounds[boffset + i] = FLT_MAX;
   }
   boffset++;
-  uint32_t soffset = sample * features_size;
+  uint64_t soffset = sample;
+  soffset *= features_size;
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
   for (uint32_t c = 0; c < clusters_size; c++) {
@@ -236,7 +241,8 @@ __global__ void kmeans_filter_assign_yy(
     return;
   }
 
-  uint32_t boffset = sample * (yy_groups_size + 1);
+  uint64_t boffset = sample;
+  boffset *= yy_groups_size + 1;
   uint32_t cluster = assignments[sample];
   assignments_prev[sample] = cluster;
   float upper_bound = bounds[boffset];
@@ -259,7 +265,8 @@ __global__ void kmeans_filter_assign_yy(
     return;
   }
   upper_bound = 0;
-  uint32_t soffset = sample * features_size;
+  uint64_t soffset = sample;
+  soffset *= features_size;
   uint32_t coffset = cluster * features_size;
   for (uint32_t f = 0; f < features_size; f++) {
     float d = samples[soffset + f] - centroids[coffset + f];
