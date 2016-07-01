@@ -146,6 +146,8 @@ __global__ void kmeans_adjust(
       }
     }
   }
+  // my_count can be 0 => we get NaN and never use this cluster again
+  // this is a feature, not a bug
   for (int f = 0; f < features_size; f++) {
     centroids[coffset + f] /= my_count;
   }
