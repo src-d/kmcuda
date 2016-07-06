@@ -191,21 +191,41 @@ __global__ void kmeans_yy_init(
   soffset *= features_size;
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
-  for (uint32_t c = 0; c < clusters_size; c++) {
-    float dist = 0;
-    uint32_t group = groups[c];
-    uint32_t coffset = c * features_size;
-    for (int f = 0; f < features_size; f++) {
-      float d = samples[soffset + f] - centroids[coffset + f];
-      dist += d * d;
+  extern __shared__ float shared_centroids[];
+  const uint32_t cstep = shmem_size / features_size;
+  const uint32_t size_each = cstep / blockDim.x + 1;
+
+  for (uint32_t gc = 0; gc < clusters_size; gc++) {
+    uint32_t coffset = gc * features_size;
+    if (threadIdx.x * size_each < cstep) {
+      for (uint32_t i = 0; i < size_each; i++) {
+        uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
+        uint32_t global_offset = coffset + local_offset;
+        if (global_offset < clusters_size * features_size) {
+          for (int f = 0; f < features_size; f++) {
+            shared_centroids[local_offset + f] = centroids[global_offset + f];
+          }
+        }
+      }
     }
-    dist = sqrt(dist);
-    if (dist < bounds[boffset + group]) {
-      bounds[boffset + group] = dist;
-    }
-    if (dist < min_dist) {
-      min_dist = dist;
-      nearest = c;
+    __syncthreads();
+
+    for (uint32_t c = gc; c < gc + cstep && c < clusters_size; c++) {
+      float dist = 0;
+      coffset = (c - gc) * features_size;
+      uint32_t group = groups[c];
+      for (int f = 0; f < features_size; f++) {
+        float d = samples[soffset + f] - shared_centroids[coffset + f];
+        dist += d * d;
+      }
+      dist = sqrt(dist);
+      if (dist < bounds[boffset + group]) {
+        bounds[boffset + group] = dist;
+      }
+      if (dist < min_dist) {
+        min_dist = dist;
+        nearest = c;
+      }
     }
   }
   bounds[boffset - 1] = min_dist;
@@ -564,7 +584,7 @@ KMCUDAResult kmeans_cuda_yy(
   dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
   dim3 gblock(BLOCK_SIZE, 1, 1);
   dim3 ggrid(yinyang_groups / cblock.x + 1, 1, 1);
-  kmeans_yy_init<<<sgrid, sblock>>>(
+  kmeans_yy_init<<<sgrid, sblock, my_shmem_size>>>(
       samples, centroids, assignments_prev, assignments, assignments_yy, bounds_yy);
   for (int iter = 1; ; iter++) {
     int status = check_changed(iter, tolerance, samples_size_, verbosity);
