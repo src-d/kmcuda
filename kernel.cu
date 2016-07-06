@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <algorithm>
 #include <memory>
+#include <cuda_profiler_api.h>
 #include "kmcuda.h"
 
 #define BLOCK_SIZE 1024
@@ -76,17 +77,36 @@ __global__ void kmeans_assign_lloyd(float *samples, float *centroids,
   soffset *= features_size;
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
-  for (uint32_t c = 0; c < clusters_size; c++) {
-    float dist = 0;
-    uint32_t coffset = c * features_size;
-    for (int f = 0; f < features_size; f++) {
-      float myf = samples[soffset + f];
-      float d = myf - centroids[coffset + f];
-      dist += d * d;
+  extern __shared__ float shared_centroids[];
+  const uint32_t cstep = shmem_size / features_size;
+  const uint32_t size_each = cstep / blockDim.x + 1;
+
+  for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
+    uint32_t coffset = gc * features_size;
+    if (threadIdx.x * size_each < cstep) {
+      for (uint32_t i = 0; i < size_each; i++) {
+        uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
+        uint32_t global_offset = coffset + local_offset;
+        if (global_offset < clusters_size * features_size) {
+          for (int f = 0; f < features_size; f++) {
+            shared_centroids[local_offset + f] = centroids[global_offset + f];
+          }
+        }
+      }
     }
-    if (dist < min_dist) {
-      min_dist = dist;
-      nearest = c;
+    __syncthreads();
+    for (uint32_t c = gc; c < gc + cstep && c < clusters_size; c++) {
+      float dist = 0;
+      coffset = (c - gc) * features_size;
+      for (int f = 0; f < features_size; f++) {
+        float myf = samples[soffset + f];
+        float d = myf - shared_centroids[coffset + f];
+        dist += d * d;
+      }
+      if (dist < min_dist) {
+        min_dist = dist;
+        nearest = c;
+      }
     }
   }
   if (nearest == UINT32_MAX) {
@@ -220,7 +240,7 @@ __global__ void kmeans_yy_init(
   atomicAdd(&changed, 1);
 }
 
-__global__ void kmeans_calc_drifts_yy(
+__global__ void kmeans_yy_calc_drifts(
     float *centroids, float *drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= clusters_size) {
@@ -235,7 +255,41 @@ __global__ void kmeans_calc_drifts_yy(
   drifts[clusters_size * features_size + c] = sqrt(sum);
 }
 
-__global__ void kmeans_filter_assign_yy(
+__global__ void kmeans_yy_find_group_max_drifts(uint32_t *groups, float *drifts) {
+  uint32_t group = blockIdx.x * blockDim.x + threadIdx.x;
+  if (group >= yy_groups_size) {
+    return;
+  }
+  const uint32_t doffset = clusters_size * features_size;
+  const uint32_t size_each = shmem_size / (2 * blockDim.x);
+  const uint32_t step = size_each * blockDim.x;
+  extern __shared__ uint32_t shmem[];
+  float *cd = (float *)shmem;
+  uint32_t *cg = shmem + shmem_size / 2;
+  float my_max = FLT_MIN;
+  for (uint32_t offset = 0; offset < clusters_size; offset += step) {
+    for (uint32_t i = 0; i < size_each; i++) {
+      uint32_t local_offset = threadIdx.x * size_each + i;
+      uint32_t global_offset = offset + local_offset;
+      if (global_offset < clusters_size) {
+        cd[local_offset] = drifts[doffset + global_offset];
+        cg[local_offset] = groups[global_offset];
+      }
+    }
+    __syncthreads();
+    for (uint32_t i = 0; i < step; i++) {
+      if (cg[i] == group) {
+        float d = cd[i];
+        if (my_max < d) {
+          my_max = d;
+        }
+      }
+    }
+  }
+  drifts[group] = my_max;
+}
+
+__global__ void kmeans_yy_filter_assign(
     float *samples, float *centroids, uint32_t *assignments_prev,
     uint32_t *assignments, uint32_t *groups, float *bounds, float *drifts) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
@@ -437,7 +491,7 @@ KMCUDAResult kmeans_cuda_lloyd(
     return pr;
   }
   for (int i = 1; ; i++) {
-    kmeans_assign_lloyd<<<sgrid, sblock>>>(
+    kmeans_assign_lloyd<<<sgrid, sblock, my_shmem_size>>>(
         samples, centroids, assignments_prev, assignments);
     int status = check_changed(i, tolerance, samples_size, verbosity);
     if (status < kmcudaSuccess) {
@@ -491,6 +545,7 @@ KMCUDAResult kmeans_cuda_yy(
        kmcudaMemoryCopyError);
   CUCH(cudaMemcpyToSymbol(clusters_size, &clusters_size_, sizeof(clusters_size_)),
        kmcudaMemoryCopyError);
+  cudaProfilerStart();
   if (verbosity > 0) {
     printf("Initializing Yinyang bounds...\n");
   }
@@ -503,46 +558,32 @@ KMCUDAResult kmeans_cuda_yy(
   if (pr != kmcudaSuccess) {
     return pr;
   }
-  uint32_t centroids_size = clusters_size_ * features_size;
-  std::unique_ptr<float[]> drifts(new float[clusters_size_]);
-  std::unique_ptr<float[]> max_drifts(new float[yinyang_groups]);
-  auto max_drifts_ptr = max_drifts.get();
   dim3 sblock(BLOCK_SIZE, 1, 1);
   dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
   dim3 cblock(BLOCK_SIZE, 1, 1);
   dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
+  dim3 gblock(BLOCK_SIZE, 1, 1);
+  dim3 ggrid(yinyang_groups / cblock.x + 1, 1, 1);
   kmeans_yy_init<<<sgrid, sblock>>>(
       samples, centroids, assignments_prev, assignments, assignments_yy, bounds_yy);
   for (int iter = 1; ; iter++) {
     int status = check_changed(iter, tolerance, samples_size_, verbosity);
     if (status < kmcudaSuccess) {
+      cudaProfilerStop();
       return kmcudaSuccess;
     }
     if (status != kmcudaSuccess) {
       return static_cast<KMCUDAResult>(status);
     }
-    CUCH(cudaMemcpyAsync(drifts_yy, centroids, centroids_size * sizeof(float),
-                         cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
+    CUCH(cudaMemcpyAsync(
+        drifts_yy, centroids, clusters_size_ * features_size * sizeof(float),
+        cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
     kmeans_adjust<<<cblock, cgrid, my_shmem_size>>>(
           samples, centroids, assignments_prev, assignments, ccounts);
-    kmeans_calc_drifts_yy<<<cblock, cgrid>>>(centroids, drifts_yy);
-    CUCH(cudaMemcpy(drifts.get(), drifts_yy + centroids_size,
-                    clusters_size_ * sizeof(float), cudaMemcpyDeviceToHost),
-         kmcudaMemoryCopyError);
-    #pragma omp for simd
-    for (uint32_t i = 0; i < yinyang_groups; i++) {
-      max_drifts_ptr[i] = FLT_MIN;
-    }
-    for (uint32_t c = 0; c < clusters_size_; c++) {
-      uint32_t cg = groups[c];
-      float d = drifts[c];
-      if (max_drifts_ptr[cg] < d) {
-        max_drifts_ptr[cg] = d;
-      }
-    }
-    CUCH(cudaMemcpyAsync(drifts_yy, max_drifts_ptr, yinyang_groups * sizeof(float),
-                         cudaMemcpyHostToDevice), kmcudaMemoryCopyError);
-    kmeans_filter_assign_yy<<<sgrid, sblock>>>(samples, centroids, assignments_prev,
+    kmeans_yy_calc_drifts<<<cblock, cgrid>>>(centroids, drifts_yy);
+    kmeans_yy_find_group_max_drifts<<<gblock, ggrid, my_shmem_size>>>(
+        assignments_yy, drifts_yy);
+    kmeans_yy_filter_assign<<<sgrid, sblock>>>(samples, centroids, assignments_prev,
         assignments, assignments_yy, bounds_yy, drifts_yy);
   }
 }
