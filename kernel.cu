@@ -5,11 +5,11 @@
 #include <cinttypes>
 #include <algorithm>
 #include <memory>
-#include <cuda_profiler_api.h>
 #include "kmcuda.h"
 
 #define BLOCK_SIZE 1024
 #define YINYANG_GROUP_TOLERANCE 0.025
+#define YINYANG_DRAFT_REASSIGNMENTS 0.05
 
 #define CUCH(cuda_call, ret) \
 do { \
@@ -529,27 +529,94 @@ KMCUDAResult kmeans_cuda_lloyd(
   return kmcudaSuccess;
 }
 
+uint32_t kmeans_fix_nan_samples(float *samples, uint32_t samples_size_,
+                                uint16_t features_size, int verbosity) {
+  std::unique_ptr<float[]> my_samples(new float[samples_size_ * features_size]);
+  if (cudaMemcpy(my_samples.get(), samples,
+                 samples_size_ * features_size * sizeof(float),
+                 cudaMemcpyDeviceToHost) != cudaSuccess) {
+    if (verbosity > 0) {
+      printf("kmeans_fix_nan_samples d2h failed\n");
+    }
+    return UINT32_MAX;
+  }
+  uint32_t si = 0;
+  for (uint32_t i = 0; i < samples_size_; i++) {
+    float f = my_samples[i * features_size];
+    if (f == f) {
+      if (si < i) {
+        memcpy(my_samples.get() + si * features_size,
+               my_samples.get() + i * features_size,
+               features_size * sizeof(float));
+      }
+      si++;
+    }
+  }
+  if (si == 0) {
+    if (verbosity > 0) {
+      printf("all the centroids are NaN\n");
+    }
+    return 0;
+  }
+  if (cudaMemcpy(samples, my_samples.get(),
+                 si * features_size * sizeof(float),
+                 cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (verbosity > 0) {
+      printf("kmeans_fix_nan_samples h2d failed\n");
+    }
+    return UINT32_MAX;
+  }
+  if (si < samples_size_ and verbosity > 0) {
+    printf("number of clusters reduced from %" PRIu32 " to %" PRIu32 "\n",
+           samples_size_, si);
+  }
+  return si;
+}
+
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yinyang_groups, uint32_t samples_size_,
     uint32_t clusters_size_, uint16_t features_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts,
     uint32_t *assignments_prev, uint32_t *assignments,
     uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy) {
-  if (yinyang_groups == 0) {
+  if (yinyang_groups == 0 || YINYANG_DRAFT_REASSIGNMENTS <= tolerance) {
     if (verbosity > 0) {
-      printf("too few clusters for this yinyang_t => Lloyd\n");
+      if (yinyang_groups == 0) {
+        printf("too few clusters for this yinyang_t => Lloyd\n");
+      } else {
+        printf("tolerance is too high (>= %.2f) => Lloyd\n",
+               YINYANG_DRAFT_REASSIGNMENTS);
+      }
     }
     return kmeans_cuda_lloyd(
         tolerance, samples_size_, clusters_size_, features_size, verbosity,
         samples, centroids, ccounts, assignments_prev, assignments);
   }
-
+  if (verbosity > 0) {
+    printf("running Lloyd until reassignments drop below %" PRIu32 "\n",
+           (uint32_t)(YINYANG_DRAFT_REASSIGNMENTS * samples_size_));
+  }
+  // run Looyd with tolerance = YINYANG_DRAFT_REASSIGNMENTS
+  auto result = kmeans_cuda_lloyd(
+      YINYANG_DRAFT_REASSIGNMENTS, samples_size_, clusters_size_, features_size,
+      verbosity, samples, centroids, ccounts, assignments_prev, assignments);
+  if (result != kmcudaSuccess) {
+    return result;
+  }
+  // some centroids may be NaN => we must filter them
+  clusters_size_ = kmeans_fix_nan_samples(
+      centroids, clusters_size_, features_size, verbosity);
+  if (clusters_size_ == UINT32_MAX) {
+    return kmcudaMemoryCopyError;
+  } else if (clusters_size_ == 0) {
+    return kmcudaRuntimeError;
+  }
   // map each centroid to yinyang group -> assignments_yy
   CUCH(cudaMemcpyToSymbol(samples_size, &clusters_size_, sizeof(samples_size_)),
        kmcudaMemoryCopyError);
   CUCH(cudaMemcpyToSymbol(clusters_size, &yinyang_groups, sizeof(clusters_size_)),
        kmcudaMemoryCopyError);
-  auto result = kmeans_init_centroids(
+  result = kmeans_init_centroids(
       kmcudaInitMethodPlusPlus, clusters_size_, features_size, yinyang_groups,
       0, verbosity, centroids, assignments,
       reinterpret_cast<float*>(assignments_prev));
@@ -568,7 +635,6 @@ KMCUDAResult kmeans_cuda_yy(
        kmcudaMemoryCopyError);
   CUCH(cudaMemcpyToSymbol(clusters_size, &clusters_size_, sizeof(clusters_size_)),
        kmcudaMemoryCopyError);
-  cudaProfilerStart();
   if (verbosity > 0) {
     printf("initializing Yinyang bounds...\n");
   }
@@ -592,7 +658,6 @@ KMCUDAResult kmeans_cuda_yy(
   for (int iter = 1; ; iter++) {
     int status = check_changed(iter, tolerance, samples_size_, verbosity);
     if (status < kmcudaSuccess) {
-      cudaProfilerStop();
       return kmcudaSuccess;
     }
     if (status != kmcudaSuccess) {
