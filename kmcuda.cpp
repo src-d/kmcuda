@@ -110,7 +110,7 @@ KMCUDAResult kmeans_init_centroids(
       break;
     case kmcudaInitMethodPlusPlus:
       if (verbosity > 0) {
-        printf("Performing kmeans++...\n");
+        printf("performing kmeans++...\n");
         fflush(stdout);
       }
       cumemcpy(centroids, samples + (rand() % samples_size) * features_size,

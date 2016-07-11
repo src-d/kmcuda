@@ -83,6 +83,7 @@ __global__ void kmeans_assign_lloyd(float *samples, float *centroids,
 
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
+    __syncthreads();
     if (threadIdx.x * size_each < cstep) {
       for (uint32_t i = 0; i < size_each; i++) {
         uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
@@ -195,8 +196,9 @@ __global__ void kmeans_yy_init(
   const uint32_t cstep = shmem_size / features_size;
   const uint32_t size_each = cstep / blockDim.x + 1;
 
-  for (uint32_t gc = 0; gc < clusters_size; gc++) {
+  for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
+    __syncthreads();
     if (threadIdx.x * size_each < cstep) {
       for (uint32_t i = 0; i < size_each; i++) {
         uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
@@ -288,6 +290,7 @@ __global__ void kmeans_yy_find_group_max_drifts(uint32_t *groups, float *drifts)
   uint32_t *cg = shmem + shmem_size / 2;
   float my_max = FLT_MIN;
   for (uint32_t offset = 0; offset < clusters_size; offset += step) {
+    __syncthreads();
     for (uint32_t i = 0; i < size_each; i++) {
       uint32_t local_offset = threadIdx.x * size_each + i;
       uint32_t global_offset = offset + local_offset;
@@ -567,7 +570,7 @@ KMCUDAResult kmeans_cuda_yy(
        kmcudaMemoryCopyError);
   cudaProfilerStart();
   if (verbosity > 0) {
-    printf("Initializing Yinyang bounds...\n");
+    printf("initializing Yinyang bounds...\n");
   }
   std::unique_ptr<uint32_t[]> groups(new uint32_t[clusters_size_]);
   CUCH(cudaMemcpyAsync(groups.get(), assignments_yy, clusters_size_ * sizeof(uint32_t),
