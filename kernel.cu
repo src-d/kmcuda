@@ -20,7 +20,11 @@ do { \
   } \
 } while (false)
 
+#define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
+#define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
+
 __device__ uint32_t changed;
+__device__ uint32_t passed_number;
 __constant__ uint32_t samples_size;
 __constant__ uint16_t features_size;
 __constant__ uint32_t clusters_size;
@@ -312,14 +316,14 @@ __global__ void kmeans_yy_find_group_max_drifts(uint32_t *groups, float *drifts)
   drifts[group] = my_max;
 }
 
-__global__ void kmeans_yy_filter_assign(
-    float *samples, float *centroids, uint32_t *assignments_prev,
-    uint32_t *assignments, uint32_t *groups, float *bounds, float *drifts) {
+__global__ void kmeans_yy_global_filter(
+    const float *samples, const float *centroids, const uint32_t *groups,
+    const float *drifts, const uint32_t *assignments,
+    uint32_t *assignments_prev, float *bounds, uint32_t *passed) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
     return;
   }
-
   uint64_t boffset = sample;
   boffset *= yy_groups_size + 1;
   uint32_t cluster = assignments[sample];
@@ -352,46 +356,87 @@ __global__ void kmeans_yy_filter_assign(
     upper_bound += d * d;
   }
   upper_bound = sqrt(upper_bound);
+  bounds[boffset] = upper_bound;
   // group filter try #2
   if (min_lower_bound >= upper_bound) {
-    bounds[boffset] = upper_bound;
     return;
   }
-
   // D'oh!
+  passed[atomicAdd(&passed_number, 1)] = sample;
+}
+
+__global__ void kmeans_yy_local_filter(
+    const float *samples, const uint32_t *passed, const float *centroids,
+    const uint32_t *groups, const float *drifts, uint32_t *assignments,
+    float *bounds) {
+  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  if (sample >= passed_number) {
+    return;
+  }
+  sample = passed[sample];
+  uint64_t soffset = sample;
+  soffset *= features_size;
+  uint64_t boffset = sample;
+  boffset *= yy_groups_size + 1;
+  float upper_bound = bounds[boffset];
   boffset++;
+  uint32_t cluster = assignments[sample];
+  uint32_t doffset = clusters_size * features_size;
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
   uint32_t nearest = cluster;
-  for (uint32_t c = 0; c < clusters_size; c++) {
-    if (c == cluster) {
-      continue;
-    }
-    uint32_t group = groups[c];
-    float lower_bound = bounds[boffset + group];
-    if (lower_bound >= upper_bound) {
-      if (lower_bound < second_min_dist) {
-        second_min_dist = lower_bound;
-      }
-      continue;
-    }
-    lower_bound += drifts[group] - drifts[doffset + c];
-    if (second_min_dist < lower_bound) {
-      continue;
-    }
+  extern __shared__ float shared_centroids[];
+  const uint32_t cstep = shmem_size / (features_size + 1);
+  const uint32_t size_each = cstep / blockDim.x + 1;
 
-    float dist = 0;
-    coffset = c * features_size;
-    for (int f = 0; f < features_size; f++) {
-      float d = samples[soffset + f] - centroids[coffset + f];
-      dist += d * d;
+  for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
+    uint32_t coffset = gc * features_size;
+    __syncthreads();
+    if (threadIdx.x * size_each < cstep) {
+      for (uint32_t i = 0; i < size_each; i++) {
+        uint32_t ci = threadIdx.x * size_each + i;
+        uint32_t local_offset = ci * (features_size + 1);
+        uint32_t global_offset = coffset + local_offset - ci;
+        if (global_offset < clusters_size * (features_size + 1)) {
+          for (int f = 0; f < features_size; f++) {
+            shared_centroids[local_offset + f] = centroids[global_offset + f];
+          }
+          reinterpret_cast<uint32_t*>(shared_centroids)[local_offset + features_size] =
+              groups[gc + ci];
+        }
+      }
     }
-    dist = sqrt(dist);
-    if (dist < min_dist) {
-      second_min_dist = min_dist;
-      min_dist = dist;
-      nearest = c;
-    } else if (dist < second_min_dist) {
-      second_min_dist = dist;
+    __syncthreads();
+
+    for (uint32_t c = gc; c < gc + cstep && c < clusters_size; c++) {
+      if (c == cluster) {
+        continue;
+      }
+      coffset = (c - gc) * (features_size + 1);
+      uint32_t group = reinterpret_cast<uint32_t*>(shared_centroids)[coffset + features_size];
+      float lower_bound = bounds[boffset + group];
+      if (lower_bound >= upper_bound) {
+        if (lower_bound < second_min_dist) {
+          second_min_dist = lower_bound;
+        }
+        continue;
+      }
+      lower_bound += drifts[group] - drifts[doffset + c];
+      if (second_min_dist < lower_bound) {
+        continue;
+      }
+      float dist = 0;
+      for (int f = 0; f < features_size; f++) {
+        float d = samples[soffset + f] - shared_centroids[coffset + f];
+        dist += d * d;
+      }
+      dist = sqrt(dist);
+      if (dist < min_dist) {
+        second_min_dist = min_dist;
+        min_dist = dist;
+        nearest = c;
+      } else if (dist < second_min_dist) {
+        second_min_dist = dist;
+      }
     }
   }
   uint32_t nearest_group = groups[nearest];
@@ -415,9 +460,7 @@ static int check_changed(int iter, float tolerance, uint32_t samples_size,
   uint32_t my_changed = 0;
   CUCH(cudaMemcpyFromSymbol(&my_changed, changed, sizeof(my_changed)),
        kmcudaMemoryCopyError);
-  if (verbosity > 0) {
-    printf("iteration %d: %" PRIu32 " reassignments\n", iter, my_changed);
-  }
+  INFO("iteration %d: %" PRIu32 " reassignments\n", iter, my_changed);
   uint32_t zero = 0;
   CUCH(cudaMemcpyToSymbolAsync(changed, &zero, sizeof(my_changed)),
        kmcudaMemoryCopyError);
@@ -463,10 +506,8 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size_, uint16_t features_size_,
   cudaDeviceProp props;
   CUCH(cudaGetDeviceProperties(&props, device), kmcudaRuntimeError);
   int my_shmem_size = static_cast<int>(props.sharedMemPerBlock);
-  if (verbosity > 1) {
-    printf("GPU #%" PRIu32 " has %d bytes of shared memory per block\n",
-           device, my_shmem_size);
-  }
+  DEBUG("GPU #%" PRIu32 " has %d bytes of shared memory per block\n",
+        device, my_shmem_size);
   my_shmem_size /= sizeof(uint32_t);
   CUCH(cudaMemcpyToSymbol(shmem_size, &my_shmem_size, sizeof(my_shmem_size)),
        kmcudaMemoryCopyError);
@@ -535,9 +576,7 @@ uint32_t kmeans_fix_nan_samples(float *samples, uint32_t samples_size_,
   if (cudaMemcpy(my_samples.get(), samples,
                  samples_size_ * features_size * sizeof(float),
                  cudaMemcpyDeviceToHost) != cudaSuccess) {
-    if (verbosity > 0) {
-      printf("kmeans_fix_nan_samples d2h failed\n");
-    }
+    INFO("kmeans_fix_nan_samples d2h failed\n");
     return UINT32_MAX;
   }
   uint32_t si = 0;
@@ -553,30 +592,22 @@ uint32_t kmeans_fix_nan_samples(float *samples, uint32_t samples_size_,
     }
   }
   if (si == 0) {
-    if (verbosity > 0) {
-      printf("all the centroids are NaN\n");
-    }
+    INFO("all the samples are NaN\n");
     return 0;
   }
   if (cudaMemcpyAsync(samples, my_samples.get(),
                       si * features_size * sizeof(float),
                       cudaMemcpyHostToDevice) != cudaSuccess) {
-    if (verbosity > 0) {
-      printf("kmeans_fix_nan_samples h2d failed\n");
-    }
+    INFO("kmeans_fix_nan_samples h2d failed\n");
     return UINT32_MAX;
   }
   if (si < samples_size_) {
-    if (verbosity > 0) {
-      printf("number of clusters reduced from %" PRIu32 " to %" PRIu32 "\n",
-             samples_size_, si);
-    }
+    INFO("number of clusters reduced from %" PRIu32 " to %" PRIu32 "\n",
+         samples_size_, si);
     if (cudaMemsetAsync(samples + si * features_size, 0xFF,
                         (samples_size_ - si) * features_size * sizeof(float))
         != cudaSuccess) {
-      if (verbosity > 0) {
-        printf("kmeans_fix_nan_samples memset failed\n");
-      }
+      INFO("kmeans_fix_nan_samples memset failed\n");
       return UINT32_MAX;
     }
   }
@@ -588,7 +619,8 @@ KMCUDAResult kmeans_cuda_yy(
     uint32_t clusters_size_, uint16_t features_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts,
     uint32_t *assignments_prev, uint32_t *assignments,
-    uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy) {
+    uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy,
+    uint32_t *passed_yy) {
   if (yinyang_groups == 0 || YINYANG_DRAFT_REASSIGNMENTS <= tolerance) {
     if (verbosity > 0) {
       if (yinyang_groups == 0) {
@@ -602,10 +634,8 @@ KMCUDAResult kmeans_cuda_yy(
         tolerance, samples_size_, clusters_size_, features_size, verbosity,
         samples, centroids, ccounts, assignments_prev, assignments);
   }
-  if (verbosity > 0) {
-    printf("running Lloyd until reassignments drop below %" PRIu32 "\n",
-           (uint32_t)(YINYANG_DRAFT_REASSIGNMENTS * samples_size_));
-  }
+  INFO("running Lloyd until reassignments drop below %" PRIu32 "\n",
+       (uint32_t)(YINYANG_DRAFT_REASSIGNMENTS * samples_size_));
   // run Looyd with tolerance = YINYANG_DRAFT_REASSIGNMENTS
   auto result = kmeans_cuda_lloyd(
       YINYANG_DRAFT_REASSIGNMENTS, samples_size_, clusters_size_, features_size,
@@ -631,10 +661,8 @@ KMCUDAResult kmeans_cuda_yy(
       0, verbosity, centroids, assignments,
       reinterpret_cast<float*>(assignments_prev));
   if (result != kmcudaSuccess) {
-    if (verbosity > 0) {
-      printf("kmeans_init_centroids() failed for yinyang groups: %s\n",
-             cudaGetErrorString(cudaGetLastError()));
-    }
+    INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
+         cudaGetErrorString(cudaGetLastError()));
     return result;
   }
   kmeans_cuda_lloyd(
@@ -645,9 +673,7 @@ KMCUDAResult kmeans_cuda_yy(
        kmcudaMemoryCopyError);
   CUCH(cudaMemcpyToSymbol(clusters_size, &clusters_size_, sizeof(clusters_size_)),
        kmcudaMemoryCopyError);
-  if (verbosity > 0) {
-    printf("initializing Yinyang bounds...\n");
-  }
+  INFO("initializing Yinyang bounds...\n");
   std::unique_ptr<uint32_t[]> groups(new uint32_t[clusters_size_]);
   CUCH(cudaMemcpyAsync(groups.get(), assignments_yy, clusters_size_ * sizeof(uint32_t),
                        cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
@@ -659,6 +685,7 @@ KMCUDAResult kmeans_cuda_yy(
   }
   dim3 sblock(BLOCK_SIZE, 1, 1);
   dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
+  dim3 sgrid2 = sgrid;
   dim3 cblock(BLOCK_SIZE, 1, 1);
   dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
   dim3 gblock(BLOCK_SIZE, 1, 1);
@@ -681,8 +708,21 @@ KMCUDAResult kmeans_cuda_yy(
     kmeans_yy_calc_drifts<<<cblock, cgrid>>>(centroids, drifts_yy);
     kmeans_yy_find_group_max_drifts<<<gblock, ggrid, my_shmem_size>>>(
         assignments_yy, drifts_yy);
-    kmeans_yy_filter_assign<<<sgrid, sblock>>>(samples, centroids, assignments_prev,
-        assignments, assignments_yy, bounds_yy, drifts_yy);
+    uint32_t passed_number_ = 0;
+    CUCH(cudaMemcpyToSymbolAsync(passed_number, &passed_number_, sizeof(passed_number_)),
+         kmcudaMemoryCopyError);
+    kmeans_yy_global_filter<<<sgrid, sblock>>>(
+        samples, centroids, assignments_yy, drifts_yy, assignments,
+        assignments_prev, bounds_yy, passed_yy);
+    if (verbosity > 1) {
+      CUCH(cudaMemcpyFromSymbol(&passed_number_, passed_number, sizeof(passed_number_)),
+           kmcudaMemoryCopyError);
+      printf("passed number: %" PRIu32 "\n", passed_number_);
+      sgrid2 = dim3(passed_number_ / sblock.x + 1, 1, 1);
+    }
+    kmeans_yy_local_filter<<<sgrid2, sblock, my_shmem_size>>>(
+        samples, passed_yy, centroids, assignments_yy, drifts_yy, assignments,
+        bounds_yy);
   }
 }
 }

@@ -28,8 +28,8 @@ KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yinyang_groups, uint32_t samples_size_,
     uint32_t clusters_size_, uint16_t features_size, int32_t verbosity,
     float *samples, float *centroids, uint32_t *ccounts,
-    uint32_t *assignments_prev, uint32_t *assignments,
-    uint32_t *assignments_yy, float *bounds_yy, float *drifts_yy);
+    uint32_t *assignments_prev, uint32_t *assignments, uint32_t *assignments_yy,
+    float *bounds_yy, float *drifts_yy, uint32_t *passed_yy);
 
 }
 
@@ -279,7 +279,7 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
     printf("yinyang groups: %" PRIu32 "\n", yinyang_groups);
   }
   void *device_assignments_yy = NULL, *device_bounds_yy = NULL,
-      *device_drifts_yy = NULL;
+      *device_drifts_yy = NULL, *device_passed_yy = NULL;
   if (yinyang_groups >= 1) {
     size_t yya_size = clusters_size * sizeof(uint32_t);
     if (verbosity > 1) {
@@ -314,10 +314,22 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
       }
       return kmcudaMemoryAllocationFailure;
     }
+
+    size_t yyp_size = samples_size * sizeof(uint32_t);
+    if (verbosity > 1) {
+      printf("yinyang passed: %zu\n", yyp_size);
+    }
+    if (cudaMalloc(&device_passed_yy, yyp_size) != cudaSuccess) {
+      if (verbosity > 0) {
+        printf("failed to allocate %zu bytes for yinyang passed\n", yyp_size);
+      }
+      return kmcudaMemoryAllocationFailure;
+    }
   }
   unique_devptr device_assignments_yinyang_sentinel(device_assignments_yy);
   unique_devptr device_bounds_yinyang_sentinel(device_bounds_yy);
   unique_devptr device_drifts_yinyang_sentinel(device_drifts_yy);
+  unique_devptr device_passed_yinyang_sentinel(device_passed_yy);
 
   if (verbosity > 1) {
     auto pmr = print_memory_stats();
@@ -354,7 +366,8 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
       reinterpret_cast<uint32_t*>(device_assignments),
       reinterpret_cast<uint32_t*>(device_assignments_yy),
       reinterpret_cast<float*>(device_bounds_yy),
-      reinterpret_cast<float*>(device_drifts_yy));
+      reinterpret_cast<float*>(device_drifts_yy),
+      reinterpret_cast<uint32_t*>(device_passed_yy));
   if (result != kmcudaSuccess) {
     if (verbosity > 1) {
       printf("kmeans_cuda_internal failed: %s\n",
