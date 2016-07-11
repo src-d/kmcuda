@@ -558,17 +558,27 @@ uint32_t kmeans_fix_nan_samples(float *samples, uint32_t samples_size_,
     }
     return 0;
   }
-  if (cudaMemcpy(samples, my_samples.get(),
-                 si * features_size * sizeof(float),
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
+  if (cudaMemcpyAsync(samples, my_samples.get(),
+                      si * features_size * sizeof(float),
+                      cudaMemcpyHostToDevice) != cudaSuccess) {
     if (verbosity > 0) {
       printf("kmeans_fix_nan_samples h2d failed\n");
     }
     return UINT32_MAX;
   }
-  if (si < samples_size_ and verbosity > 0) {
-    printf("number of clusters reduced from %" PRIu32 " to %" PRIu32 "\n",
-           samples_size_, si);
+  if (si < samples_size_) {
+    if (verbosity > 0) {
+      printf("number of clusters reduced from %" PRIu32 " to %" PRIu32 "\n",
+             samples_size_, si);
+    }
+    if (cudaMemsetAsync(samples + si * features_size, 0xFF,
+                        (samples_size_ - si) * features_size * sizeof(float))
+        != cudaSuccess) {
+      if (verbosity > 0) {
+        printf("kmeans_fix_nan_samples memset failed\n");
+      }
+      return UINT32_MAX;
+    }
   }
   return si;
 }
