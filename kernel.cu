@@ -10,7 +10,8 @@
 
 #define BLOCK_SIZE 1024
 #define YINYANG_GROUP_TOLERANCE 0.02
-#define YINYANG_DRAFT_REASSIGNMENTS 0.5
+#define YINYANG_DRAFT_REASSIGNMENTS 0.11
+#define YINYANG_REFRESH_EPSILON 1e-4
 
 #define CUCH(cuda_call, ret) \
 do { \
@@ -396,7 +397,8 @@ __global__ void kmeans_yy_local_filter(
         continue;
       }
       coffset = (c - gc) * (features_size + 1);
-      uint32_t group = reinterpret_cast<uint32_t*>(shared_centroids)[coffset + features_size];
+      uint32_t group = reinterpret_cast<uint32_t*>(shared_centroids)[
+          coffset + features_size];
       float lower_bound = bounds[boffset + group];
       if (lower_bound >= upper_bound) {
         if (lower_bound < second_min_dist) {
@@ -603,16 +605,14 @@ KMCUDAResult kmeans_cuda_yy(
                      true, &my_shmem_size));
   dim3 sblock(BLOCK_SIZE, 1, 1);
   dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
-  dim3 sgrid2 = sgrid;
   dim3 cblock(BLOCK_SIZE, 1, 1);
   dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
   dim3 gblock(BLOCK_SIZE, 1, 1);
   dim3 ggrid(yinyang_groups / cblock.x + 1, 1, 1);
-  INFO("initializing Yinyang bounds...\n");
-  kmeans_yy_init<<<sgrid, sblock, my_shmem_size>>>(
-      samples, centroids, assignments, assignments_yy, bounds_yy);
-  for (int iter = 1; ; iter++) {
-    if (iter > 1) {
+  bool refresh = true;
+  uint32_t passed_number_ = 0;
+  for (int iter = 0; ; iter++) {
+    if (iter > 0) {
       int status = check_changed(iter, tolerance, samples_size_, verbosity);
       if (status < kmcudaSuccess) {
         return kmcudaSuccess;
@@ -620,6 +620,19 @@ KMCUDAResult kmeans_cuda_yy(
       if (status != kmcudaSuccess) {
         return static_cast<KMCUDAResult>(status);
       }
+      CUCH(cudaMemcpyFromSymbol(&passed_number_, passed_number, sizeof(passed_number_)),
+           kmcudaMemoryCopyError);
+      DEBUG("passed number: %" PRIu32 "\n", passed_number_);
+      if (1.f - (passed_number_ + 0.f) / samples_size_ < YINYANG_REFRESH_EPSILON) {
+        refresh = true;
+      }
+      passed_number_ = 0;
+    }
+    if (refresh) {
+      INFO("refreshing Yinyang bounds...\n");
+      kmeans_yy_init<<<sgrid, sblock, my_shmem_size>>>(
+          samples, centroids, assignments, assignments_yy, bounds_yy);
+      refresh = false;
     }
     CUCH(cudaMemcpyAsync(
         drifts_yy, centroids, clusters_size_ * features_size * sizeof(float),
@@ -629,19 +642,12 @@ KMCUDAResult kmeans_cuda_yy(
     kmeans_yy_calc_drifts<<<cblock, cgrid>>>(centroids, drifts_yy);
     kmeans_yy_find_group_max_drifts<<<gblock, ggrid, my_shmem_size>>>(
         assignments_yy, drifts_yy);
-    uint32_t passed_number_ = 0;
     CUCH(cudaMemcpyToSymbolAsync(passed_number, &passed_number_, sizeof(passed_number_)),
          kmcudaMemoryCopyError);
     kmeans_yy_global_filter<<<sgrid, sblock>>>(
         samples, centroids, assignments_yy, drifts_yy, assignments,
         assignments_prev, bounds_yy, passed_yy);
-    if (verbosity > 1) {
-      CUCH(cudaMemcpyFromSymbol(&passed_number_, passed_number, sizeof(passed_number_)),
-           kmcudaMemoryCopyError);
-      printf("passed number: %" PRIu32 "\n", passed_number_);
-      sgrid2 = dim3(passed_number_ / sblock.x + 1, 1, 1);
-    }
-    kmeans_yy_local_filter<<<sgrid2, sblock, my_shmem_size>>>(
+    kmeans_yy_local_filter<<<sgrid, sblock, my_shmem_size>>>(
         samples, passed_yy, centroids, assignments_yy, drifts_yy, assignments,
         bounds_yy);
   }
