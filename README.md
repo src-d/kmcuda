@@ -4,14 +4,16 @@
 This implementation is based on ["Yinyang K-Means: A Drop-In Replacement
 of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
 article. While it introduces some overhead and many conditional clauses
-which are bad for CUDA, it still shows 2x speedup against the Lloyd
+which are bad for CUDA, it still shows 1.6-2x speedup against the Lloyd
 algorithm.
 
 The major difference between this project and others is that it is
 optimized for low memory consumption and large number of clusters. E.g.,
-kmcuda can sort 3M samples into 30000 clusters (if you have several days
-and 12 GB of GPU memory). Yinyang can be turned off to save GPU memory but
-the slow Lloyd will be used then.
+kmcuda can sort 4M samples in 480 dimensions into 40000 clusters (if you
+have several days and 12 GB of GPU memory). 300K samples are grouped
+into 5000 clusters in 10 minutes on NVIDIA Titan X. Yinyang can be
+turned off to save GPU memory but the slower Lloyd will be used then.
+Two centroid initialization ways are supported: random and kmeans++.
 
 The code has been thoroughly tested to yield bit-to-bit identical
 results from Yinyang and Lloyd.
@@ -19,6 +21,20 @@ results from Yinyang and Lloyd.
 Technically, this project is a library which exports the single function
 defined in `wrappers.h`, `kmeans_cuda`. It has a built-in Python3 native
 extension support, so you can `from libKMCUDA import kmeans_cuda`.
+
+Notes
+-----
+Lloyd is tolerant to samples with NaN features while Yinyang is not.
+It may happen that some of the resulting clusters contain zero elements.
+In such cases, their features are set to NaN.
+
+If you get OOM with the default parameters, set `yinyang_t` to 0 which
+forces Lloyd. `verbosity` 2 will print the memory allocation statistics
+(all GPU allocation happens at startup).
+
+Data type is 32-bit float. Number of samples is limited by 1^32,
+clusters by 1^32 and features by 1^16. Besides, the product of
+clusters number and features number may not exceed 1^32.
 
 Building
 --------
