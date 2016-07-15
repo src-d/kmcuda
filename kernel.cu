@@ -31,7 +31,8 @@ __constant__ uint32_t yy_groups_size;
 __constant__ int shmem_size;
 
 __global__ void kmeans_plus_plus(
-    uint32_t cc, float *samples, float *centroids, float *dists,
+    uint32_t cc, const float *__restrict__ samples,
+    const float *__restrict__ centroids, float *dists,
     float *dist_sums) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
@@ -71,9 +72,9 @@ __global__ void kmeans_plus_plus(
   }
 }
 
-__global__ void kmeans_assign_lloyd(const float *samples, float *centroids,
-                                    uint32_t *assignments_prev,
-                                    uint32_t *assignments) {
+__global__ void kmeans_assign_lloyd(
+    const float *__restrict__ samples, const float *__restrict__ centroids,
+    uint32_t *assignments_prev, uint32_t *assignments) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
     return;
@@ -138,8 +139,8 @@ __global__ void kmeans_assign_lloyd(const float *samples, float *centroids,
 }
 
 __global__ void kmeans_adjust(
-    const float *samples, float *centroids, uint32_t *assignments_prev,
-    uint32_t *assignments, uint32_t *ccounts) {
+    const float *__restrict__ samples, const uint32_t *__restrict__ assignments_prev,
+    const uint32_t *__restrict__ assignments, float *centroids, uint32_t *ccounts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= clusters_size) {
     return;
@@ -192,8 +193,9 @@ __global__ void kmeans_adjust(
 }
 
 __global__ void kmeans_yy_init(
-    const float *samples, const float *centroids, const uint32_t *assignments,
-    const uint32_t *groups, float *bounds) {
+    const float *__restrict__ samples, const float *__restrict__ centroids,
+    const uint32_t *__restrict__ assignments, const uint32_t *__restrict__ groups,
+    float *bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
     return;
@@ -254,7 +256,7 @@ __global__ void kmeans_yy_init(
 }
 
 __global__ void kmeans_yy_calc_drifts(
-    float *centroids, float *drifts) {
+    const float *__restrict__ centroids, float *drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= clusters_size) {
     return;
@@ -268,7 +270,8 @@ __global__ void kmeans_yy_calc_drifts(
   drifts[clusters_size * features_size + c] = sqrt(sum);
 }
 
-__global__ void kmeans_yy_find_group_max_drifts(uint32_t *groups, float *drifts) {
+__global__ void kmeans_yy_find_group_max_drifts(
+    const uint32_t *__restrict__ groups, float *drifts) {
   uint32_t group = blockIdx.x * blockDim.x + threadIdx.x;
   if (group >= yy_groups_size) {
     return;
@@ -304,8 +307,9 @@ __global__ void kmeans_yy_find_group_max_drifts(uint32_t *groups, float *drifts)
 }
 
 __global__ void kmeans_yy_global_filter(
-    const float *samples, const float *centroids, const uint32_t *groups,
-    const float *drifts, const uint32_t *assignments,
+    const float *__restrict__ samples, const float *__restrict__ centroids,
+    const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
+    const uint32_t *__restrict__ assignments,
     uint32_t *assignments_prev, float *bounds, uint32_t *passed) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= samples_size) {
@@ -354,9 +358,9 @@ __global__ void kmeans_yy_global_filter(
 }
 
 __global__ void kmeans_yy_local_filter(
-    const float *samples, const uint32_t *passed, const float *centroids,
-    const uint32_t *groups, const float *drifts, uint32_t *assignments,
-    float *bounds) {
+    const float *__restrict__ samples, const uint32_t *__restrict__ passed,
+    const float *__restrict__ centroids, const uint32_t *__restrict__ groups,
+    const float *__restrict__ drifts, uint32_t *assignments, float *bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= passed_number) {
     return;
@@ -559,7 +563,7 @@ KMCUDAResult kmeans_cuda_lloyd(
       }
     }
     kmeans_adjust<<<cblock, cgrid, my_shmem_size>>>(
-        samples, centroids, assignments_prev, assignments, ccounts);
+        samples, assignments_prev, assignments, centroids, ccounts);
   }
 }
 
@@ -650,7 +654,7 @@ KMCUDAResult kmeans_cuda_yy(
         drifts_yy, centroids, clusters_size_ * features_size * sizeof(float),
         cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
     kmeans_adjust<<<cblock, cgrid, my_shmem_size>>>(
-          samples, centroids, assignments_prev, assignments, ccounts);
+          samples, assignments_prev, assignments, centroids, ccounts);
     kmeans_yy_calc_drifts<<<cblock, cgrid>>>(centroids, drifts_yy);
     kmeans_yy_find_group_max_drifts<<<gblock, ggrid, my_shmem_size>>>(
         assignments_yy, drifts_yy);
