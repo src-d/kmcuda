@@ -460,13 +460,13 @@ static int check_changed(int iter, float tolerance, uint32_t samples_size,
   CUCH(cudaMemcpyFromSymbol(&my_changed, changed, sizeof(my_changed)),
        kmcudaMemoryCopyError);
   INFO("iteration %d: %" PRIu32 " reassignments\n", iter, my_changed);
-  uint32_t zero = 0;
-  CUCH(cudaMemcpyToSymbolAsync(changed, &zero, sizeof(my_changed)),
-       kmcudaMemoryCopyError);
   if (my_changed <= tolerance * samples_size) {
     return -1;
   }
   assert(my_changed <= samples_size);
+  uint32_t zero = 0;
+  CUCH(cudaMemcpyToSymbolAsync(changed, &zero, sizeof(zero)),
+       kmcudaMemoryCopyError);
   return kmcudaSuccess;
 }
 
@@ -476,6 +476,9 @@ static KMCUDAResult prepare_mem(uint32_t *ccounts, uint32_t *assignments,
   CUCH(cudaMemcpyFromSymbol(my_shmem_size, shmem_size, sizeof(shmem_size)),
        kmcudaMemoryCopyError);
   *my_shmem_size *= sizeof(uint32_t);
+  uint32_t zero = 0;
+  CUCH(cudaMemcpyToSymbolAsync(changed, &zero, sizeof(zero)),
+       kmcudaMemoryCopyError);
   if (!resume) {
     CUCH(cudaMemsetAsync(ccounts, 0, clusters_size * sizeof(uint32_t)),
          kmcudaRuntimeError);
@@ -595,6 +598,9 @@ KMCUDAResult kmeans_cuda_yy(
       YINYANG_DRAFT_REASSIGNMENTS, samples_size_, clusters_size_, features_size,
       verbosity, false, samples, centroids, ccounts, assignments_prev,
       assignments, &iter));
+  if (check_changed(iter, tolerance, samples_size_, 0) < kmcudaSuccess) {
+    return kmcudaSuccess;
+  }
 
   // map each centroid to yinyang group -> assignments_yy
   CUCH(cudaMemcpyToSymbol(samples_size, &clusters_size_, sizeof(samples_size_)),
