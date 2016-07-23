@@ -38,15 +38,14 @@ __global__ void kmeans_plus_plus(
   if (sample >= samples_size) {
     return;
   }
-  uint64_t soffset = sample;
-  soffset *= features_size;
+  samples += static_cast<uint64_t>(sample) * features_size;
   extern __shared__ float local_dists[];
   float dist = 0;
-  if (samples[soffset] == samples[soffset]) {
+  if (samples[0] == samples[0]) {
     uint32_t coffset = (cc - 1) * features_size;
     #pragma unroll 4
     for (uint16_t f = 0; f < features_size; f++) {
-      float d = samples[soffset + f] - centroids[coffset + f];
+      float d = samples[f] - centroids[coffset + f];
       dist += d * d;
     }
     dist = sqrt(dist);
@@ -86,20 +85,19 @@ __global__ void kmeans_assign_lloyd(
   if (sample >= samples_size) {
     return;
   }
-  uint64_t soffset = sample;
-  soffset *= features_size;
+  samples += static_cast<uint64_t>(sample) * features_size;
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = shmem_size / (features_size + 1);
   float *csqrs = shared_centroids + cstep * features_size;
   const uint32_t size_each = cstep / blockDim.x + 1;
-  bool insane = samples[soffset] != samples[soffset];
+  bool insane = samples[0] != samples[0];
   float ssqr = 0;
   if (!insane) {
     #pragma unroll 4
     for (int f = 0; f < features_size; f++) {
-      float v = samples[soffset + f];
+      float v = samples[f];
       ssqr += v * v;
     }
   }
@@ -133,7 +131,7 @@ __global__ void kmeans_assign_lloyd(
       coffset = (c - gc) * features_size;
       #pragma unroll 4
       for (int f = 0; f < features_size; f++) {
-        dist += samples[soffset + f] * shared_centroids[coffset + f];
+        dist += samples[f] * shared_centroids[coffset + f];
       }
       dist = ssqr + csqrs[c - gc] - 2 * dist;
       if (dist < min_dist) {
@@ -166,10 +164,10 @@ __global__ void kmeans_adjust(
   if (c >= clusters_size) {
     return;
   }
-  uint32_t coffset = c * features_size;
   uint32_t my_count = ccounts[c];
+  centroids += c * features_size;
   for (int f = 0; f < features_size; f++) {
-    centroids[coffset + f] *= my_count;
+    centroids[f] *= my_count;
   }
   extern __shared__ uint32_t ass[];
   int step = shmem_size / 2;
@@ -199,7 +197,7 @@ __global__ void kmeans_adjust(
         soffset *= features_size;
         #pragma unroll 4
         for (int f = 0; f < features_size; f++) {
-          centroids[coffset + f] += samples[soffset + f] * sign;
+          centroids[f] += samples[soffset + f] * sign;
         }
       }
     }
@@ -208,7 +206,7 @@ __global__ void kmeans_adjust(
   // this is a feature, not a bug
   #pragma unroll 4
   for (int f = 0; f < features_size; f++) {
-    centroids[coffset + f] /= my_count;
+    centroids[f] /= my_count;
   }
   ccounts[c] = my_count;
 }
@@ -221,14 +219,12 @@ __global__ void kmeans_yy_init(
   if (sample >= samples_size) {
     return;
   }
-  uint64_t boffset = sample;
-  boffset *= yy_groups_size + 1;
+  bounds += static_cast<uint64_t>(sample) * (yy_groups_size + 1);
   for (uint32_t i = 0; i < yy_groups_size + 1; i++) {
-    bounds[boffset + i] = FLT_MAX;
+    bounds[i] = FLT_MAX;
   }
-  boffset++;
-  uint64_t soffset = sample;
-  soffset *= features_size;
+  bounds++;
+  samples += static_cast<uint64_t>(sample) * features_size;
   uint32_t nearest = assignments[sample];
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = shmem_size / features_size;
@@ -261,16 +257,16 @@ __global__ void kmeans_yy_init(
       }
       #pragma unroll 4
       for (int f = 0; f < features_size; f++) {
-        float d = samples[soffset + f] - shared_centroids[coffset + f];
+        float d = samples[f] - shared_centroids[coffset + f];
         dist += d * d;
       }
       dist = sqrt(dist);
       if (c != nearest) {
-        if (dist < bounds[boffset + group]) {
-          bounds[boffset + group] = dist;
+        if (dist < bounds[group]) {
+          bounds[group] = dist;
         }
       } else {
-        bounds[boffset - 1] = dist;
+        bounds[-1] = dist;
       }
     }
   }
@@ -336,40 +332,38 @@ __global__ void kmeans_yy_global_filter(
   if (sample >= samples_size) {
     return;
   }
-  uint64_t boffset = sample;
-  boffset *= yy_groups_size + 1;
+  bounds += static_cast<uint64_t>(sample) * (yy_groups_size + 1);
   uint32_t cluster = assignments[sample];
   assignments_prev[sample] = cluster;
-  float upper_bound = bounds[boffset];
+  float upper_bound = bounds[0];
   uint32_t doffset = clusters_size * features_size;
   float cluster_drift = drifts[doffset + cluster];
   upper_bound += cluster_drift;
-  boffset++;
+  bounds++;
   float min_lower_bound = FLT_MAX;
   for (uint32_t g = 0; g < yy_groups_size; g++) {
-    float lower_bound = bounds[boffset + g] - drifts[g];
-    bounds[boffset + g] = lower_bound;
+    float lower_bound = bounds[g] - drifts[g];
+    bounds[g] = lower_bound;
     if (lower_bound < min_lower_bound) {
       min_lower_bound = lower_bound;
     }
   }
-  boffset--;
+  bounds--;
   // group filter try #1
   if (min_lower_bound >= upper_bound) {
-    bounds[boffset] = upper_bound;
+    bounds[0] = upper_bound;
     return;
   }
   upper_bound = 0;
-  uint64_t soffset = sample;
-  soffset *= features_size;
+  samples += static_cast<uint64_t>(sample) * features_size;
   uint32_t coffset = cluster * features_size;
   #pragma unroll 4
   for (uint32_t f = 0; f < features_size; f++) {
-    float d = samples[soffset + f] - centroids[coffset + f];
+    float d = samples[f] - centroids[coffset + f];
     upper_bound += d * d;
   }
   upper_bound = sqrt(upper_bound);
-  bounds[boffset] = upper_bound;
+  bounds[0] = upper_bound;
   // group filter try #2
   if (min_lower_bound >= upper_bound) {
     return;
@@ -387,12 +381,10 @@ __global__ void kmeans_yy_local_filter(
     return;
   }
   sample = passed[sample];
-  uint64_t soffset = sample;
-  soffset *= features_size;
-  uint64_t boffset = sample;
-  boffset *= yy_groups_size + 1;
-  float upper_bound = bounds[boffset];
-  boffset++;
+  samples += static_cast<uint64_t>(sample) * features_size;
+  bounds += static_cast<uint64_t>(sample) * (yy_groups_size + 1);
+  float upper_bound = bounds[0];
+  bounds++;
   uint32_t cluster = assignments[sample];
   uint32_t doffset = clusters_size * features_size;
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
@@ -432,7 +424,7 @@ __global__ void kmeans_yy_local_filter(
         // this may happen if the centroid is insane (NaN)
         continue;
       }
-      float lower_bound = bounds[boffset + group];
+      float lower_bound = bounds[group];
       if (lower_bound >= upper_bound) {
         if (lower_bound < second_min_dist) {
           second_min_dist = lower_bound;
@@ -446,7 +438,7 @@ __global__ void kmeans_yy_local_filter(
       float dist = 0;
       #pragma unroll 4
       for (int f = 0; f < features_size; f++) {
-        float d = samples[soffset + f] - shared_centroids[coffset + f];
+        float d = samples[f] - shared_centroids[coffset + f];
         dist += d * d;
       }
       dist = sqrt(dist);
@@ -461,14 +453,14 @@ __global__ void kmeans_yy_local_filter(
   }
   uint32_t nearest_group = groups[nearest];
   uint32_t previous_group = groups[cluster];
-  bounds[boffset + nearest_group] = second_min_dist;
+  bounds[nearest_group] = second_min_dist;
   if (nearest_group != previous_group) {
-    float pb = bounds[boffset + previous_group];
+    float pb = bounds[previous_group];
     if (pb > upper_bound) {
-      bounds[boffset + previous_group] = upper_bound;
+      bounds[previous_group] = upper_bound;
     }
   }
-  bounds[boffset - 1] = min_dist;
+  bounds[-1] = min_dist;
   if (cluster != nearest) {
     assignments[sample] = nearest;
     atomicAdd(&changed, 1);
