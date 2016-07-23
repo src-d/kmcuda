@@ -58,14 +58,21 @@ __global__ void kmeans_plus_plus(
     dist = prev_dist;
   }
   local_dists[threadIdx.x] = dist;
+  uint32_t end = blockDim.x;
+  if ((blockIdx.x + 1) * blockDim.x > samples_size) {
+    end = samples_size - blockIdx.x * blockDim.x;
+  }
   __syncthreads();
-  if (threadIdx.x == 0) {
-    uint32_t end = blockDim.x;
-    if ((blockIdx.x + 1) * blockDim.x > samples_size) {
-      end = samples_size - blockIdx.x * blockDim.x;
+  if (threadIdx.x % 16 == 0) {
+    float psum = 0;
+    for (uint32_t i = threadIdx.x; i < end && i < threadIdx.x + 16; i++) {
+      psum += local_dists[i];
     }
+    local_dists[threadIdx.x] = psum;
+  }
+  if (threadIdx.x == 0) {
     float block_sum = 0;
-    for (uint32_t i = 0; i < end; i++) {
+    for (uint32_t i = 0; i < end; i += 16) {
       block_sum += local_dists[i];
     }
     dist_sums[blockIdx.x] = block_sum;
