@@ -91,22 +91,36 @@ __global__ void kmeans_assign_lloyd(
   float min_dist = FLT_MAX;
   uint32_t nearest = UINT32_MAX;
   extern __shared__ float shared_centroids[];
-  const uint32_t cstep = shmem_size / features_size;
+  const uint32_t cstep = shmem_size / (features_size + 1);
+  float *csqrs = shared_centroids + cstep * features_size;
   const uint32_t size_each = cstep / blockDim.x + 1;
   bool insane = samples[soffset] != samples[soffset];
+  float ssqr = 0;
+  if (!insane) {
+    #pragma unroll 4
+    for (int f = 0; f < features_size; f++) {
+      float v = samples[soffset + f];
+      ssqr += v * v;
+    }
+  }
 
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
     __syncthreads();
     if (threadIdx.x * size_each < cstep) {
       for (uint32_t i = 0; i < size_each; i++) {
-        uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
+        uint32_t ci = threadIdx.x * size_each + i;
+        uint32_t local_offset = ci * features_size;
         uint32_t global_offset = coffset + local_offset;
         if (global_offset < clusters_size * features_size) {
+          float csqr = 0;
           #pragma unroll 4
           for (int f = 0; f < features_size; f++) {
-            shared_centroids[local_offset + f] = centroids[global_offset + f];
+            float v = centroids[global_offset + f];
+            shared_centroids[local_offset + f] = v;
+            csqr += v * v;
           }
+          csqrs[ci] = csqr;
         }
       }
     }
@@ -119,9 +133,9 @@ __global__ void kmeans_assign_lloyd(
       coffset = (c - gc) * features_size;
       #pragma unroll 4
       for (int f = 0; f < features_size; f++) {
-        float d = samples[soffset + f] - shared_centroids[coffset + f];
-        dist += d * d;
+        dist += samples[soffset + f] * shared_centroids[coffset + f];
       }
+      dist = ssqr + csqrs[c - gc] - 2 * dist;
       if (dist < min_dist) {
         min_dist = dist;
         nearest = c;
