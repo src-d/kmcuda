@@ -390,7 +390,7 @@ __global__ void kmeans_yy_local_filter(
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
   uint32_t nearest = cluster;
   extern __shared__ float shared_centroids[];
-  const uint32_t cstep = shmem_size / (features_size + 1);
+  const uint32_t cstep = shmem_size / features_size;
   const uint32_t size_each = cstep / blockDim.x + 1;
 
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
@@ -399,15 +399,13 @@ __global__ void kmeans_yy_local_filter(
     if (threadIdx.x * size_each < cstep) {
       for (uint32_t i = 0; i < size_each; i++) {
         uint32_t ci = threadIdx.x * size_each + i;
-        uint32_t local_offset = ci * (features_size + 1);
-        uint32_t global_offset = coffset + local_offset - ci;
+        uint32_t local_offset = ci * features_size;
+        uint32_t global_offset = coffset + local_offset;
         if (global_offset < clusters_size * features_size) {
           #pragma unroll 4
           for (int f = 0; f < features_size; f++) {
             shared_centroids[local_offset + f] = centroids[global_offset + f];
           }
-          reinterpret_cast<uint32_t*>(shared_centroids)[local_offset + features_size] =
-              groups[gc + ci];
         }
       }
     }
@@ -417,9 +415,7 @@ __global__ void kmeans_yy_local_filter(
       if (c == cluster) {
         continue;
       }
-      coffset = (c - gc) * (features_size + 1);
-      uint32_t group = reinterpret_cast<uint32_t*>(shared_centroids)[
-          coffset + features_size];
+      uint32_t group = groups[c];
       if (group >= yy_groups_size) {
         // this may happen if the centroid is insane (NaN)
         continue;
@@ -436,6 +432,7 @@ __global__ void kmeans_yy_local_filter(
         continue;
       }
       float dist = 0;
+      uint32_t coffset = (c - gc) * features_size;
       #pragma unroll 4
       for (int f = 0; f < features_size; f++) {
         float d = samples[f] - shared_centroids[coffset + f];
