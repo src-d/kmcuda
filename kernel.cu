@@ -8,7 +8,14 @@
 
 #include "private.h"
 
-#define BLOCK_SIZE 1024
+#define BS_KMPP 512
+#define BS_LL_ASS 256
+#define BS_LL_CNT 256
+#define BS_YY_INI 256
+#define BS_YY_GFL 512
+#define BS_YY_LFL 512
+#define BLOCK_SIZE 1024  // for all the rest of the kernels
+
 #define YINYANG_GROUP_TOLERANCE 0.02
 #define YINYANG_DRAFT_REASSIGNMENTS 0.11
 #define YINYANG_REFRESH_EPSILON 1e-4
@@ -526,7 +533,7 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size_, uint16_t features_size_,
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t cc, float *samples, float *centroids,
     float *dists, float *dist_sum, float **dev_sums) {
-  dim3 block(BLOCK_SIZE, 1, 1);
+  dim3 block(BS_KMPP, 1, 1);
   dim3 grid(samples_size / block.x + 1, 1, 1);
   if (*dev_sums == NULL) {
     CUCH(cudaMalloc(reinterpret_cast<void**>(dev_sums), grid.x * sizeof(float)),
@@ -553,9 +560,9 @@ KMCUDAResult kmeans_cuda_lloyd(
     uint16_t features_size, int32_t verbosity, bool resume,
     const float *samples, float *centroids, uint32_t *ccounts,
     uint32_t *assignments_prev, uint32_t *assignments, int *iterations = nullptr) {
-  dim3 sblock(BLOCK_SIZE, 1, 1);
+  dim3 sblock(BS_LL_ASS, 1, 1);
   dim3 sgrid(samples_size / sblock.x + 1, 1, 1);
-  dim3 cblock(BLOCK_SIZE, 1, 1);
+  dim3 cblock(BS_LL_CNT, 1, 1);
   dim3 cgrid(clusters_size / cblock.x + 1, 1, 1);
   uint32_t my_shmem_size;
   RETERR(prepare_mem(ccounts, assignments, samples_size, clusters_size,
@@ -635,12 +642,16 @@ KMCUDAResult kmeans_cuda_yy(
   uint32_t my_shmem_size;
   RETERR(prepare_mem(ccounts, assignments, samples_size_, clusters_size_,
                      true, &my_shmem_size));
-  dim3 sblock(BLOCK_SIZE, 1, 1);
-  dim3 sgrid(samples_size_ / sblock.x + 1, 1, 1);
-  dim3 cblock(BLOCK_SIZE, 1, 1);
+  dim3 siblock(BS_YY_INI, 1, 1);
+  dim3 sigrid(samples_size_ / siblock.x + 1, 1, 1);
+  dim3 sgblock(BS_YY_GFL, 1, 1);
+  dim3 sggrid(samples_size_ / sgblock.x + 1, 1, 1);
+  dim3 slblock(BS_YY_LFL, 1, 1);
+  dim3 slgrid(samples_size_ / slblock.x + 1, 1, 1);
+  dim3 cblock(BS_LL_CNT, 1, 1);
   dim3 cgrid(clusters_size_ / cblock.x + 1, 1, 1);
   dim3 gblock(BLOCK_SIZE, 1, 1);
-  dim3 ggrid(yinyang_groups / cblock.x + 1, 1, 1);
+  dim3 ggrid(yinyang_groups / gblock.x + 1, 1, 1);
   bool refresh = true;
   uint32_t passed_number_ = 0;
   for (; ; iter++) {
@@ -662,7 +673,7 @@ KMCUDAResult kmeans_cuda_yy(
     }
     if (refresh) {
       INFO("refreshing Yinyang bounds...\n");
-      kmeans_yy_init<<<sgrid, sblock, my_shmem_size>>>(
+      kmeans_yy_init<<<sigrid, siblock, my_shmem_size>>>(
           samples, centroids, assignments, assignments_yy, bounds_yy);
       refresh = false;
     }
@@ -676,10 +687,10 @@ KMCUDAResult kmeans_cuda_yy(
         assignments_yy, drifts_yy);
     CUCH(cudaMemcpyToSymbolAsync(passed_number, &passed_number_, sizeof(passed_number_)),
          kmcudaMemoryCopyError);
-    kmeans_yy_global_filter<<<sgrid, sblock>>>(
+    kmeans_yy_global_filter<<<sggrid, sgblock>>>(
         samples, centroids, assignments_yy, drifts_yy, assignments,
         assignments_prev, bounds_yy, passed_yy);
-    kmeans_yy_local_filter<<<sgrid, sblock, my_shmem_size>>>(
+    kmeans_yy_local_filter<<<slgrid, slblock, my_shmem_size>>>(
         samples, passed_yy, centroids, assignments_yy, drifts_yy, assignments,
         bounds_yy);
   }

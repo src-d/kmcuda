@@ -11,7 +11,7 @@ The major difference between this project and others is that it is
 optimized for low memory consumption and large number of clusters. E.g.,
 kmcuda can sort 4M samples in 480 dimensions into 40000 clusters (if you
 have several days and 12 GB of GPU memory). 300K samples are grouped
-into 5000 clusters in 8 minutes on NVIDIA Titan X (15 iterations). Yinyang can be
+into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
 Two centroid initialization ways are supported: random and kmeans++.
 
