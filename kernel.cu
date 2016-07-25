@@ -76,6 +76,7 @@ __global__ void kmeans_plus_plus(
     }
     local_dists[threadIdx.x] = psum;
   }
+  __syncthreads();
   if (threadIdx.x == 0) {
     float block_sum = 0;
     for (uint32_t i = 0; i < end; i += 16) {
