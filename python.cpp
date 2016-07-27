@@ -101,10 +101,14 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t *assignments = reinterpret_cast<uint32_t*>(PyArray_DATA(
       reinterpret_cast<PyArrayObject*>(assignments_array)));
 
-  int result = kmeans_cuda(
+  int result;
+  Py_BEGIN_ALLOW_THREADS
+  result = kmeans_cuda(
       kmpp == Py_True, tolerance, yinyang_t, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      verbosity, samples, centroids, assignments);
+      verbosity, -1, samples, centroids, assignments);
+  Py_END_ALLOW_THREADS
+
   switch (result) {
     case kmcudaInvalidArguments:
       PyErr_SetString(PyExc_ValueError,
