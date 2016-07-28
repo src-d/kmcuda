@@ -106,7 +106,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   result = kmeans_cuda(
       kmpp == Py_True, tolerance, yinyang_t, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      verbosity, -1, samples, centroids, assignments);
+      verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
 
   switch (result) {
