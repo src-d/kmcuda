@@ -22,8 +22,11 @@ extern "C" {
 /// @param features_size number of features.
 /// @param clusters_size number of clusters.
 /// @param seed random generator seed passed to srand().
-/// @param device CUDA device index - usually 0.
+/// @param device used CUDA device mask. E.g., 1 means #0, 2 means #1 and 3 means
+///               #0 and #1. n-th bit corresponds to n-th device.
 /// @param verbosity 0 - no output; 1 - progress output; >=2 - debug output.
+/// @param device_ptrs If negative, input and output pointers are taken from host;
+///                    otherwise, device number where to load and store data.
 /// @param samples input array of size samples_size x features_size in row major format.
 /// @param centroids output array of centroids of size clusters_size x features_size
 ///                  in row major format.
@@ -32,8 +35,8 @@ extern "C" {
 /// @return KMCUDAResult.
 int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
                 uint16_t features_size, uint32_t clusters_size, uint32_t seed,
-                uint32_t device, int32_t verbosity, const float *samples,
-                float *centroids, uint32_t *assignments);
+                uint32_t device, int32_t verbosity, int device_ptrs,
+                const float *samples, float *centroids, uint32_t *assignments);
 }
 
 #endif //KMCUDA_KMCUDA_H

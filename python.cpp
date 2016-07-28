@@ -65,6 +65,11 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       &seed, &device, &verbosity)) {
     return NULL;
   }
+  if (device == 0) {
+    PyErr_SetString(PyExc_ValueError, "\"device\" must be a binary device "
+        "selection mask where 1 on n-th place activates n-th device");
+    return NULL;
+  }
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
     PyErr_SetString(PyExc_ValueError, "\"clusters\" must be greater than 1 and "
                                       "less than (1 << 32) - 1");
