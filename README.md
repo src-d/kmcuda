@@ -45,6 +45,16 @@ cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
 It requires cudart 7.5 / OpenMP 4.0 capable compiler.
 
+Python users: if you are using Linux x86-64 and CUDA 7.5, then you can
+install this easily:
+```
+pip install libKMCUDA
+```
+Otherwise, you'll have to install it from source:
+```
+pip install git+https://github.com/src-d/kmcuda.git
+```
+
 Python example
 --------------
 ```
