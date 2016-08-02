@@ -113,21 +113,19 @@ __global__ void kmeans_assign_lloyd(
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
     __syncthreads();
-    if (threadIdx.x * size_each < cstep) {
-      for (uint32_t i = 0; i < size_each; i++) {
-        uint32_t ci = threadIdx.x * size_each + i;
-        uint32_t local_offset = ci * features_size;
-        uint32_t global_offset = coffset + local_offset;
-        if (global_offset < clusters_size * features_size) {
-          float csqr = 0;
-          #pragma unroll 4
-          for (int f = 0; f < features_size; f++) {
-            float v = centroids[global_offset + f];
-            shared_centroids[local_offset + f] = v;
-            csqr += v * v;
-          }
-          csqrs[ci] = csqr;
+    for (uint32_t i = 0; i < size_each; i++) {
+      uint32_t ci = threadIdx.x * size_each + i;
+      uint32_t local_offset = ci * features_size;
+      uint32_t global_offset = coffset + local_offset;
+      if (global_offset < clusters_size * features_size && ci < cstep) {
+        float csqr = 0;
+        #pragma unroll 4
+        for (int f = 0; f < features_size; f++) {
+          float v = centroids[global_offset + f];
+          shared_centroids[local_offset + f] = v;
+          csqr += v * v;
         }
+        csqrs[ci] = csqr;
       }
     }
     __syncthreads();
@@ -241,15 +239,14 @@ __global__ void kmeans_yy_init(
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
     __syncthreads();
-    if (threadIdx.x * size_each < cstep) {
-      for (uint32_t i = 0; i < size_each; i++) {
-        uint32_t local_offset = (threadIdx.x * size_each + i) * features_size;
-        uint32_t global_offset = coffset + local_offset;
-        if (global_offset < clusters_size * features_size) {
-          #pragma unroll 4
-          for (int f = 0; f < features_size; f++) {
-            shared_centroids[local_offset + f] = centroids[global_offset + f];
-          }
+    for (uint32_t i = 0; i < size_each; i++) {
+      uint32_t ci = threadIdx.x * size_each + i;
+      uint32_t local_offset = ci * features_size;
+      uint32_t global_offset = coffset + local_offset;
+      if (global_offset < clusters_size * features_size && ci < cstep) {
+        #pragma unroll 4
+        for (int f = 0; f < features_size; f++) {
+          shared_centroids[local_offset + f] = centroids[global_offset + f];
         }
       }
     }
@@ -313,7 +310,7 @@ __global__ void kmeans_yy_find_group_max_drifts(
     for (uint32_t i = 0; i < size_each; i++) {
       uint32_t local_offset = threadIdx.x * size_each + i;
       uint32_t global_offset = offset + local_offset;
-      if (global_offset < clusters_size) {
+      if (global_offset < clusters_size && local_offset < step) {
         cd[local_offset] = drifts[doffset + global_offset];
         cg[local_offset] = groups[global_offset];
       }
@@ -404,16 +401,14 @@ __global__ void kmeans_yy_local_filter(
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
     __syncthreads();
-    if (threadIdx.x * size_each < cstep) {
-      for (uint32_t i = 0; i < size_each; i++) {
-        uint32_t ci = threadIdx.x * size_each + i;
-        uint32_t local_offset = ci * features_size;
-        uint32_t global_offset = coffset + local_offset;
-        if (global_offset < clusters_size * features_size) {
-          #pragma unroll 4
-          for (int f = 0; f < features_size; f++) {
-            shared_centroids[local_offset + f] = centroids[global_offset + f];
-          }
+    for (uint32_t i = 0; i < size_each; i++) {
+      uint32_t ci = threadIdx.x * size_each + i;
+      uint32_t local_offset = ci * features_size;
+      uint32_t global_offset = coffset + local_offset;
+      if (global_offset < clusters_size * features_size && ci < cstep) {
+        #pragma unroll 4
+        for (int f = 0; f < features_size; f++) {
+          shared_centroids[local_offset + f] = centroids[global_offset + f];
         }
       }
     }
