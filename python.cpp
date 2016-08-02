@@ -1,4 +1,6 @@
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <Python.h>
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
@@ -49,20 +51,35 @@ class pyobj : public pyobj_parent {
       ptr, [](PyObject *p){ Py_DECREF(p); }) {}
 };
 
+static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
+    {"kmeans++", kmcudaInitMethodPlusPlus},
+    {"random", kmcudaInitMethodRandom},
+    {"import", kmcudaInitMethodImport}
+};
+
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 0;
-  int32_t verbosity = 0;
+  int32_t verbosity = 0, device_ptrs = -1;
   float tolerance = .01, yinyang_t = .1;
-  PyObject *kmpp = Py_False;
+  const char *init = "kmeans++";
   PyObject *samples_obj;
-  static const char *kwlist[] = {"samples", "clusters", "tolerance", "kmpp",
-                                 "yinyang_t", "seed", "device", "verbosity", NULL};
+  static const char *kwlist[] = {
+      "samples", "clusters", "tolerance", "init", "yinyang_t", "seed",
+      "device", "verbosity", "device_ptrs", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fO!fIIi", const_cast<char**>(kwlist),
-      &samples_obj, &clusters_size, &tolerance, &PyBool_Type, &kmpp, &yinyang_t,
-      &seed, &device, &verbosity)) {
+      args, kwargs, "OI|fsfIIii", const_cast<char**>(kwlist), &samples_obj,
+      &clusters_size, &tolerance, &init, &yinyang_t, &seed, &device,
+      &verbosity, &device_ptrs)) {
+    return NULL;
+  }
+  auto iminit = init_methods.find(init);
+  if (iminit == init_methods.end()) {
+    PyErr_SetString(
+        PyExc_ValueError,
+        "Unknown centroids initialization method. Supported values are "
+        "\"kmeans++\", \"random\" and \"import\".");
     return NULL;
   }
   if (device == 0) {
@@ -109,9 +126,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
-      kmpp == Py_True, tolerance, yinyang_t, samples_size,
+      iminit->second, tolerance, yinyang_t, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      verbosity, samples, centroids, assignments);
+      verbosity, device_ptrs, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
 
   switch (result) {

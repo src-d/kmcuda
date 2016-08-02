@@ -76,12 +76,22 @@ extern "C" {
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, int32_t verbosity,
-    const std::vector<int> &devs, const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums,
-    udevptrs<float> *centroids) {
+    const std::vector<int> &devs, int device_ptrs, const float *host_centroids,
+    const udevptrs<float> &samples, udevptrs<float> *dists,
+    udevptrs<float> *dev_sums, udevptrs<float> *centroids) {
   uint32_t ssize = features_size * sizeof(float);
   srand(seed);
   switch (method) {
+    case kmcudaInitMethodImport:
+      if (device_ptrs < 0) {
+        CUMEMCPY_H2D_ASYNC(*centroids, 0, host_centroids,
+                           clusters_size * features_size);
+      } else {
+        int devi = device_ptrs;
+        FOR_OTHER_DEVS(
+          CUP2P(centroids, 0, clusters_size * features_size);
+        );
+      }
     case kmcudaInitMethodRandom:
       INFO("randomly picking initial centroids...\n");
       for (uint32_t c = 0; c < clusters_size; c++) {
@@ -150,26 +160,23 @@ KMCUDAResult kmeans_init_centroids(
           }
         }
         assert(j > 0);
-        FOR_ALL_DEVSI(
-          CUMEMCPY_D2D_ASYNC(*centroids, i * features_size,
-                             samples, (j - 1) * features_size,
-                             ssize);
-        );
+        CUMEMCPY_D2D_ASYNC(*centroids, i * features_size, samples,
+                           (j - 1) * features_size, ssize);
       }
       break;
   }
-
   INFO("\rdone            \n");
   return kmcudaSuccess;
 }
 
-int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
-                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
-                uint32_t device, int32_t verbosity, int device_ptrs,
-                const float *samples, float *centroids, uint32_t *assignments) {
+int kmeans_cuda(
+    KMCUDAInitMethod init, float tolerance, float yinyang_t,
+    uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+    uint32_t seed, uint32_t device, int32_t verbosity, int device_ptrs,
+    const float *samples, float *centroids, uint32_t *assignments) {
   DEBUG("arguments: %d %.3f %.2f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
         " %" PRIu32 " %" PRIi32 " %p %p %p\n",
-        kmpp, tolerance, yinyang_t, samples_size, features_size, clusters_size,
+        init, tolerance, yinyang_t, samples_size, features_size, clusters_size,
         seed, device, verbosity, samples, centroids, assignments);
   RETERR(check_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
@@ -239,8 +246,8 @@ int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_si
          DEBUG("kmeans_cuda_setup failed: %s\n",
                cudaGetErrorString(cudaGetLastError())));
   RETERR(kmeans_init_centroids(
-      static_cast<KMCUDAInitMethod>(kmpp), samples_size, features_size,
-      clusters_size, seed, verbosity, devs, device_samples,
+      init, samples_size, features_size, clusters_size, seed, verbosity, devs,
+      device_ptrs, centroids, device_samples,
       reinterpret_cast<udevptrs<float>*>(&device_assignments),
       reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
       &device_centroids),

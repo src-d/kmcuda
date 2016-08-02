@@ -5,11 +5,6 @@
 #include <tuple>
 #include "wrappers.h"
 
-enum KMCUDAInitMethod {
-  kmcudaInitMethodRandom = 0,
-  kmcudaInitMethodPlusPlus
-};
-
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
 
@@ -115,6 +110,22 @@ do { \
   FOR_ALL_DEVS(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 } while(false)
 
+#define FOR_OTHER_DEVS(...) do { \
+  for (size_t odevi = 0; odevi < devs.size(); odevi++) { \
+    if (odevi == devi) { \
+      continue; \
+    } \
+    __VA_ARGS__; \
+  } } while(false)
+
+#define CUP2P(what, offset, size) do { \
+  CUCH(cudaMemcpyPeerAsync( \
+      (*what)[odevi].get() + offset, devs[odevi], (*what)[devi].get() + offset, \
+      devs[devi], size * sizeof(std::remove_reference<decltype(*what)>::type \
+      ::value_type::element_type)), \
+       kmcudaMemoryCopyError); \
+} while(false)
+
 inline std::vector<std::tuple<uint32_t, uint32_t>> distribute(
     uint32_t amount, uint32_t size_each, const std::vector<int> &devs) {
   if (devs.size() == 0) {
@@ -175,9 +186,9 @@ KMCUDAResult kmeans_cuda_yy(
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, int32_t verbosity,
-    const std::vector<int> &devs, const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums,
-    udevptrs<float> *centroids);
+    const std::vector<int> &devs, int device_ptrs, const float *host_centroids,
+    const udevptrs<float> &samples, udevptrs<float> *dists,
+    udevptrs<float> *dev_sums, udevptrs<float> *centroids);
 }
 
 #endif //KMCUDA_PRIVATE_H

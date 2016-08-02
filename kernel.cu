@@ -20,22 +20,6 @@
 #define YINYANG_DRAFT_REASSIGNMENTS 0.11
 #define YINYANG_REFRESH_EPSILON 1e-4
 
-#define FOR_OTHER_DEVS(...) do { \
-  for (size_t odevi = 0; odevi < devs.size(); odevi++) { \
-    if (odevi == devi) { \
-      continue; \
-    } \
-    __VA_ARGS__; \
-  } } while(false)
-
-#define CUP2P(what, offset, size) do { \
-  CUCH(cudaMemcpyPeerAsync( \
-      (*what)[odevi].get() + offset, devs[odevi], (*what)[devi].get() + offset, \
-      devs[devi], size * sizeof(std::remove_reference<decltype(*what)>::type \
-      ::value_type::element_type)), \
-       kmcudaMemoryCopyError); \
-} while(false)
-
 __device__ uint32_t changed_number;
 __device__ uint32_t passed_number;
 __constant__ uint32_t samples_size;
