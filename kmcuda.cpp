@@ -94,8 +94,13 @@ KMCUDAResult kmeans_init_centroids(
       break;
     case kmcudaInitMethodPlusPlus:
       INFO("performing kmeans++...\n");
-      CUMEMCPY(centroids, samples + (rand() % samples_size) * features_size,
-               ssize, cudaMemcpyDeviceToDevice);
+      float smoke = NAN;
+      uint32_t first_offset;
+      while (smoke != smoke) {
+        first_offset = (rand() % samples_size) * features_size;
+        CUMEMCPY(&smoke, samples + first_offset, sizeof(float), cudaMemcpyDeviceToHost);
+      }
+      CUMEMCPY(centroids, samples + first_offset, ssize, cudaMemcpyDeviceToDevice);
       std::unique_ptr<float[]> host_dists(new float[samples_size]);
       float *dev_sums = NULL;
       unique_devptrptr dev_sums_sentinel(reinterpret_cast<void**>(&dev_sums));
@@ -117,12 +122,6 @@ KMCUDAResult kmeans_init_centroids(
         uint32_t choice_approx = choice * samples_size;
         double choice_sum = choice * dist_sum;
         uint32_t j;
-        {
-          double dist_sum2 = 0;
-          for (j = 0; j < samples_size && dist_sum2 < choice_sum; j++) {
-            dist_sum2 += host_dists[j];
-          }
-        }
         if (choice_approx < 100) {
           double dist_sum2 = 0;
           for (j = 0; j < samples_size && dist_sum2 < choice_sum; j++) {
