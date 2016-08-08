@@ -60,14 +60,18 @@ static std::vector<int> setup_devices(uint32_t device, int verbosity) {
   return std::move(devs);
 }
 
-static KMCUDAResult print_memory_stats() {
-  size_t free_bytes, total_bytes;
-  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-    return kmcudaRuntimeError;
-  }
-  printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
-         total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
-         free_bytes, total_bytes);
+static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
+  FOR_EACH_DEV(
+    size_t free_bytes, total_bytes;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+      return kmcudaRuntimeError;
+    }
+    printf("GPU #%d memory: used %zu bytes (%.1f%%), free %zu bytes, "
+           "total %zu bytes\n",
+           dev, total_bytes - free_bytes,
+           (total_bytes - free_bytes) * 100.0 / total_bytes,
+           free_bytes, total_bytes);
+  );
   return kmcudaSuccess;
 }
 
@@ -75,11 +79,10 @@ extern "C" {
 
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, int32_t verbosity,
-    const std::vector<int> &devs, int device_ptrs, const float *host_centroids,
+    uint32_t clusters_size, uint32_t seed, const std::vector<int> &devs,
+    int device_ptrs, int32_t verbosity, const float *host_centroids,
     const udevptrs<float> &samples, udevptrs<float> *dists,
     udevptrs<float> *dev_sums, udevptrs<float> *centroids) {
-  uint32_t ssize = features_size * sizeof(float);
   srand(seed);
   switch (method) {
     case kmcudaInitMethodImport:
@@ -87,7 +90,7 @@ KMCUDAResult kmeans_init_centroids(
         CUMEMCPY_H2D_ASYNC(*centroids, 0, host_centroids,
                            clusters_size * features_size);
       } else {
-        int devi = device_ptrs;
+        uint32_t devi = device_ptrs;
         FOR_OTHER_DEVS(
           CUP2P(centroids, 0, clusters_size * features_size);
         );
@@ -129,7 +132,7 @@ KMCUDAResult kmeans_init_centroids(
         }
         float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
-            samples_size, features_size, i, verbosity, devs, samples, centroids,
+            samples_size, features_size, i, devs, verbosity, samples, centroids,
             dists, dev_sums, host_dists.get(), &dist_sum),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         assert(dist_sum == dist_sum);
@@ -161,7 +164,7 @@ KMCUDAResult kmeans_init_centroids(
         }
         assert(j > 0);
         CUMEMCPY_D2D_ASYNC(*centroids, i * features_size, samples,
-                           (j - 1) * features_size, ssize);
+                           (j - 1) * features_size, features_size);
       }
       break;
   }
@@ -172,7 +175,7 @@ KMCUDAResult kmeans_init_centroids(
 int kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
-    uint32_t seed, uint32_t device, int32_t verbosity, int device_ptrs,
+    uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
     const float *samples, float *centroids, uint32_t *assignments) {
   DEBUG("arguments: %d %.3f %.2f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
         " %" PRIu32 " %" PRIi32 " %p %p %p\n",
@@ -196,7 +199,7 @@ int kmeans_cuda(
   udevptrs<float> device_centroids;
   size_t centroids_size = static_cast<size_t>(clusters_size) * features_size;
   bool must_copy_result = true;
-  FOR_ALL_DEVS(
+  FOR_EACH_DEV(
     if (dev == device_ptrs) {
       device_centroids.emplace_back(centroids, true);
       must_copy_result = false;
@@ -205,7 +208,7 @@ int kmeans_cuda(
     }
   );
   udevptrs<uint32_t> device_assignments;
-  FOR_ALL_DEVS(
+  FOR_EACH_DEV(
     if (dev == device_ptrs) {
       device_assignments.emplace_back(assignments, true);
     } else {
@@ -217,18 +220,18 @@ int kmeans_cuda(
   udevptrs<uint32_t> device_ccounts;
   CUMALLOC(device_ccounts, clusters_size);
 
-  uint32_t yinyang_groups = yinyang_t * clusters_size;
-  DEBUG("yinyang groups: %" PRIu32 "\n", yinyang_groups);
+  uint32_t yy_groups_size = yinyang_t * clusters_size;
+  DEBUG("yinyang groups: %" PRIu32 "\n", yy_groups_size);
   udevptrs<uint32_t> device_assignments_yy, device_passed_yy;
   udevptrs<float> device_bounds_yy, device_drifts_yy, device_centroids_yy;
-  if (yinyang_groups >= 1) {
+  if (yy_groups_size >= 1) {
     CUMALLOC(device_assignments_yy, clusters_size);
-    size_t yyb_size = static_cast<size_t>(samples_size) * (yinyang_groups + 1);
+    size_t yyb_size = static_cast<size_t>(samples_size) * (yy_groups_size + 1);
     CUMALLOC(device_bounds_yy, yyb_size);
     CUMALLOC(device_drifts_yy, centroids_size + clusters_size);
     CUMALLOC(device_passed_yy, samples_size);
-    size_t yyc_size = yinyang_groups * features_size;
-    if (yyc_size + (clusters_size + yinyang_groups) <= samples_size) {
+    size_t yyc_size = yy_groups_size * features_size;
+    if (yyc_size + (clusters_size + yy_groups_size) <= samples_size) {
       for (auto &p : device_passed_yy) {
         device_centroids_yy.emplace_back(
             reinterpret_cast<float*>(p.get()), true);
@@ -239,29 +242,24 @@ int kmeans_cuda(
   }
 
   if (verbosity > 1) {
-    RETERR(print_memory_stats());
+    RETERR(print_memory_stats(devs));
   }
   RETERR(kmeans_cuda_setup(samples_size, features_size, clusters_size,
-                           yinyang_groups, devs, verbosity),
-         DEBUG("kmeans_cuda_setup failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
+                           yy_groups_size, devs, verbosity),
+         DEBUG("kmeans_cuda_setup failed: %s\n", CUERRSTR()));
   RETERR(kmeans_init_centroids(
-      init, samples_size, features_size, clusters_size, seed, verbosity, devs,
-      device_ptrs, centroids, device_samples,
+      init, samples_size, features_size, clusters_size, seed, devs, device_ptrs,
+      verbosity, centroids, device_samples,
       reinterpret_cast<udevptrs<float>*>(&device_assignments),
       reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
       &device_centroids),
-         DEBUG("kmeans_init_centroids failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
+         DEBUG("kmeans_init_centroids failed: %s\n", CUERRSTR()));
   RETERR(kmeans_cuda_yy(
-      tolerance, yinyang_groups, samples_size, clusters_size, features_size,
-      verbosity, devs, device_samples, &device_centroids,
-      &device_ccounts, &device_assignments_prev,
-      &device_assignments, &device_assignments_yy,
-      &device_centroids_yy, &device_bounds_yy,
-      &device_drifts_yy, &device_passed_yy),
-         DEBUG("kmeans_cuda_internal failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
+      tolerance, yy_groups_size, samples_size, clusters_size, features_size,
+      devs, verbosity, device_samples, &device_centroids, &device_ccounts,
+      &device_assignments_prev, &device_assignments, &device_assignments_yy,
+      &device_centroids_yy, &device_bounds_yy, &device_drifts_yy, &device_passed_yy),
+         DEBUG("kmeans_cuda_internal failed: %s\n", CUERRSTR()));
   if (must_copy_result) {
     if (device_ptrs < 0) {
       CUCH(cudaMemcpy(centroids, device_centroids[0].get(),

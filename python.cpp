@@ -65,13 +65,13 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   PyObject *samples_obj;
   static const char *kwlist[] = {
       "samples", "clusters", "tolerance", "init", "yinyang_t", "seed",
-      "device", "verbosity", "device_ptrs", NULL};
+      "device", "device_ptrs", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
       args, kwargs, "OI|fsfIIii", const_cast<char**>(kwlist), &samples_obj,
       &clusters_size, &tolerance, &init, &yinyang_t, &seed, &device,
-      &verbosity, &device_ptrs)) {
+      &device_ptrs, &verbosity)) {
     return NULL;
   }
   auto iminit = init_methods.find(init);
@@ -128,7 +128,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   result = kmeans_cuda(
       iminit->second, tolerance, yinyang_t, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      verbosity, device_ptrs, samples, centroids, assignments);
+      device_ptrs, verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
 
   switch (result) {
