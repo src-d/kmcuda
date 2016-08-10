@@ -99,7 +99,8 @@ __global__ void kmeans_assign_lloyd(
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = shmem_size / (features_size + 1);
   float *csqrs = shared_centroids + cstep * features_size;
-  const uint32_t size_each = cstep / blockDim.x + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, samples_size - blockIdx.x * blockDim.x) + 1;
   bool insane = samples[0] != samples[0];
   float ssqr = 0;
   if (!insane) {
@@ -234,7 +235,8 @@ __global__ void kmeans_yy_init(
   uint32_t nearest = assignments[sample];
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = shmem_size / features_size;
-  const uint32_t size_each = cstep / blockDim.x + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, samples_size - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
@@ -299,7 +301,8 @@ __global__ void kmeans_yy_find_group_max_drifts(
     return;
   }
   const uint32_t doffset = clusters_size * features_size;
-  const uint32_t size_each = shmem_size / (2 * blockDim.x);
+  const uint32_t size_each = shmem_size /
+      (2 * min(blockDim.x, yy_groups_size - blockIdx.x * blockDim.x));
   const uint32_t step = size_each * blockDim.x;
   extern __shared__ uint32_t shmem[];
   float *cd = (float *)shmem;
@@ -396,7 +399,8 @@ __global__ void kmeans_yy_local_filter(
   uint32_t nearest = cluster;
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = shmem_size / features_size;
-  const uint32_t size_each = cstep / blockDim.x + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, passed_number - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < clusters_size; gc += cstep) {
     uint32_t coffset = gc * features_size;
