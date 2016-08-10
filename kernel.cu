@@ -56,8 +56,8 @@ __global__ void kmeans_plus_plus(
   }
   local_dists[threadIdx.x] = dist;
   uint32_t end = blockDim.x;
-  if ((blockIdx.x + 1) * blockDim.x > d_samples_size) {
-    end = d_samples_size - blockIdx.x * blockDim.x;
+  if ((blockIdx.x + 1) * blockDim.x > border) {
+    end = border - blockIdx.x * blockDim.x;
   }
   __syncthreads();
   if (threadIdx.x % 16 == 0) {
@@ -566,20 +566,20 @@ KMCUDAResult kmeans_cuda_plus_plus(
     auto offset = std::get<0>(p);
     auto length = std::get<1>(p);
     dim3 block(BS_KMPP, 1, 1);
-    dim3 grid(std::get<1>(p) / block.x + 1, 1, 1);
+    dim3 grid(length / block.x + 1, 1, 1);
     kmeans_plus_plus<<<grid, block, block.x * sizeof(float)>>>(
         length, cc, samples[devi].get() + offset * h_features_size,
         (*centroids)[devi].get(), (*dists)[devi].get(), (*dev_sums)[devi].get());
     CUCH(cudaMemcpyAsync(
+        host_dists + offset, (*dists)[devi].get(),
+        length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
+    CUCH(cudaMemcpyAsync(
         dist_sums.get() + dist_offset, (*dev_sums)[devi].get(),
         grid.x * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
-    CUCH(cudaMemcpyAsync(
-        host_dists + dist_offset, (*dists)[devi].get(),
-        length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
     dist_offset += grid.x;
   );
   SYNC_ALL_DEVS;
-  float ds = 0;
+  double ds = 0;
   #pragma omp simd reduction(+:ds)
   for (uint32_t i = 0; i < dist_offset; i++) {
     ds += dist_sums[i];
