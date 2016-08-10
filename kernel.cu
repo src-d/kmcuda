@@ -240,14 +240,16 @@ __global__ void kmeans_assign_lloyd(
 }
 
 __global__ void kmeans_adjust(
-    const uint32_t border, const float *__restrict__ samples,
+    const uint32_t border, const uint32_t coffset,
+    const float *__restrict__ samples,
     const uint32_t *__restrict__ assignments_prev,
-    const uint32_t *__restrict__ assignments, float *__restrict__ centroids,
-    uint32_t *__restrict__ ccounts) {
+    const uint32_t *__restrict__ assignments,
+    float *__restrict__ centroids, uint32_t *__restrict__ ccounts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= border) {
     return;
   }
+  c += coffset;
   uint32_t my_count = ccounts[c];
   centroids += c * d_features_size;
   for (int f = 0; f < d_features_size; f++) {
@@ -728,10 +730,9 @@ KMCUDAResult kmeans_cuda_lloyd(
         auto length = std::get<1>(p);
         dim3 cgrid(length / cblock.x + 1, 1, 1);
         kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
-            length, samples[devi].get(), (*assignments_prev)[devi].get(),
-            (*assignments)[devi].get(),
-            (*centroids)[devi].get() + offset * h_features_size,
-            (*ccounts)[devi].get() + offset);
+            length, offset, samples[devi].get(),
+            (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
+            (*centroids)[devi].get(), (*ccounts)[devi].get());
         FOR_OTHER_DEVS(
           CUP2P(ccounts, offset, length);
           CUP2P(centroids, offset * h_features_size, length * h_features_size);
