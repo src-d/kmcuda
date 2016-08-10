@@ -57,6 +57,32 @@ static std::vector<int> setup_devices(uint32_t device, int verbosity) {
     }
     device >>= 1;
   }
+  if (devs.size() > 1) {
+    for (int dev1 : devs) {
+      for (int dev2 : devs) {
+        if (dev1 <= dev2) {
+          continue;
+        }
+        int access = 0;
+        cudaDeviceCanAccessPeer(&access, dev1, dev2);
+        if (!access) {
+          INFO("warning: p2p %d <-> %d is impossible\n", dev1, dev2);
+        }
+      }
+    }
+    for (int dev : devs) {
+      cudaSetDevice(dev);
+      for (int odev : devs) {
+        if (dev == odev) {
+          continue;
+        }
+        if (cudaDeviceEnablePeerAccess(odev, 0) != cudaSuccess) {
+          INFO("warning: failed to enable p2p on gpu #%d: %s\n", dev,
+               CUERRSTR());
+        }
+      }
+    }
+  }
   return std::move(devs);
 }
 
