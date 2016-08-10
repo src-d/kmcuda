@@ -33,7 +33,7 @@ class CMakeBuild(build_py):
 setup(
     name="libKMCUDA",
     description="Accelerated K-means on GPU",
-    version="1.0.1",
+    version="2.0.0",
     license="MIT",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",

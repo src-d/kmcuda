@@ -77,6 +77,89 @@ __global__ void kmeans_plus_plus(
   }
 }
 
+__global__ void kmeans_assign_lloyd_smallc(
+    const uint32_t border, const float *__restrict__ samples,
+    const float *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
+    uint32_t * __restrict__ assignments) {
+  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  if (sample >= border) {
+    return;
+  }
+  samples += static_cast<uint64_t>(sample) * d_features_size;
+  float min_dist = FLT_MAX;
+  uint32_t nearest = UINT32_MAX;
+  extern __shared__ float shared_samples[];
+  float *shared_centroids = shared_samples + blockDim.x * d_features_size;
+  const uint32_t cstep = (d_shmem_size - blockDim.x * d_features_size) /
+      (d_features_size + 1);
+  float *csqrs = shared_centroids + cstep * d_features_size;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+  bool insane = samples[0] != samples[0];
+  float ssqr = 0;
+  const uint32_t soffset = threadIdx.x * d_features_size;
+  if (!insane) {
+    #pragma unroll 4
+    for (int f = 0; f < d_features_size; f++) {
+      float v = samples[f];
+      shared_samples[soffset + f] = v;
+      ssqr += v * v;
+    }
+  }
+
+  for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
+    uint32_t coffset = gc * d_features_size;
+    __syncthreads();
+    for (uint32_t i = 0; i < size_each; i++) {
+      uint32_t ci = threadIdx.x * size_each + i;
+      uint32_t local_offset = ci * d_features_size;
+      uint32_t global_offset = coffset + local_offset;
+      if (global_offset < d_clusters_size * d_features_size && ci < cstep) {
+        float csqr = 0;
+        #pragma unroll 4
+        for (int f = 0; f < d_features_size; f++) {
+          float v = centroids[global_offset + f];
+          shared_centroids[local_offset + f] = v;
+          csqr += v * v;
+        }
+        csqrs[ci] = csqr;
+      }
+    }
+    __syncthreads();
+    if (insane) {
+      continue;
+    }
+    for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
+      float dist = 0;
+      coffset = (c - gc) * d_features_size;
+      #pragma unroll 4
+      for (int f = 0; f < d_features_size; f++) {
+        dist += shared_samples[soffset + f] * shared_centroids[coffset + f];
+      }
+      dist = ssqr + csqrs[c - gc] - 2 * dist;
+      if (dist < min_dist) {
+        min_dist = dist;
+        nearest = c;
+      }
+    }
+  }
+  if (nearest == UINT32_MAX) {
+    if (!insane) {
+      printf("CUDA kernel kmeans_assign: nearest neighbor search failed for "
+             "sample %" PRIu32 "\n", sample);
+      return;
+    } else {
+      nearest = d_clusters_size;
+    }
+  }
+  uint32_t ass = assignments[sample];
+  assignments_prev[sample] = ass;
+  if (ass != nearest) {
+    assignments[sample] = nearest;
+    atomicAdd(&d_changed_number, 1);
+  }
+}
+
 __global__ void kmeans_assign_lloyd(
     const uint32_t border, const float *__restrict__ samples,
     const float *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
@@ -91,7 +174,8 @@ __global__ void kmeans_assign_lloyd(
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = d_shmem_size / (d_features_size + 1);
   float *csqrs = shared_centroids + cstep * d_features_size;
-  const uint32_t size_each = cstep / min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
   bool insane = samples[0] != samples[0];
   float ssqr = 0;
   if (!insane) {
@@ -228,7 +312,8 @@ __global__ void kmeans_yy_init(
   uint32_t nearest = assignments[sample];
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = d_shmem_size / d_features_size;
-  const uint32_t size_each = cstep / min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
     uint32_t coffset = gc * d_features_size;
@@ -395,7 +480,8 @@ __global__ void kmeans_yy_local_filter(
   uint32_t nearest = cluster;
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = d_shmem_size / d_features_size;
-  const uint32_t size_each = cstep / min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+  const uint32_t size_each = cstep /
+      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
     uint32_t coffset = gc * d_features_size;
@@ -610,7 +696,13 @@ KMCUDAResult kmeans_cuda_lloyd(
         auto offset = std::get<0>(p);
         auto length = std::get<1>(p);
         dim3 sgrid(length / sblock.x + 1, 1, 1);
-        kmeans_assign_lloyd<<<sgrid, sblock, shmem_sizes[devi]>>>(
+        int shmem_size = shmem_sizes[devi];
+        auto assigner = kmeans_assign_lloyd;
+        if (shmem_size - sblock.x * h_features_size * sizeof(float) >=
+            (h_features_size + 1) * sizeof(float)) {
+          assigner = kmeans_assign_lloyd_smallc;
+        }
+        assigner<<<sgrid, sblock, shmem_size>>>(
             length, samples[devi].get() + offset * h_features_size,
             (*centroids)[devi].get(), (*assignments_prev)[devi].get() + offset,
             (*assignments)[devi].get() + offset);
