@@ -213,6 +213,7 @@ int kmeans_cuda(
   RETERR(check_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
       device, samples, centroids, assignments));
+  INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
   auto devs = setup_devices(device, verbosity);
   if (devs.empty()) {
     return kmcudaNoSuchDevice;
