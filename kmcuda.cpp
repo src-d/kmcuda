@@ -8,6 +8,9 @@
 #include <memory>
 
 #include <cuda_runtime_api.h>
+#ifdef PROFILE
+#include <cuda_profiler_api.h>
+#endif
 
 #include "private.h"
 
@@ -273,6 +276,9 @@ int kmeans_cuda(
   RETERR(kmeans_cuda_setup(samples_size, features_size, clusters_size,
                            yy_groups_size, devs, verbosity),
          DEBUG("kmeans_cuda_setup failed: %s\n", CUERRSTR()));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStart());
+  #endif
   RETERR(kmeans_init_centroids(
       init, samples_size, features_size, clusters_size, seed, devs, device_ptrs,
       verbosity, centroids, device_samples,
@@ -286,6 +292,9 @@ int kmeans_cuda(
       &device_assignments_prev, &device_assignments, &device_assignments_yy,
       &device_centroids_yy, &device_bounds_yy, &device_drifts_yy, &device_passed_yy),
          DEBUG("kmeans_cuda_internal failed: %s\n", CUERRSTR()));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStop());
+  #endif
   if (must_copy_result) {
     if (device_ptrs < 0) {
       CUCH(cudaMemcpy(centroids, device_centroids[0].get(),
