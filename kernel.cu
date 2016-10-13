@@ -649,16 +649,21 @@ KMCUDAResult kmeans_cuda_plus_plus(
   size_t dist_sums_size = h_samples_size / BS_KMPP + devs.size();
   std::unique_ptr<float[]> dist_sums(new float[dist_sums_size]);
   memset(dist_sums.get(), 0, dist_sums_size * sizeof(float));
-  uint32_t dist_offset = 0;
   FOR_EACH_DEVI(
-    auto &p = plan[devi];
-    auto offset = std::get<0>(p);
-    auto length = std::get<1>(p);
+    uint32_t offset, length;
+    std::tie(offset, length) = plan[devi];
     dim3 block(BS_KMPP, 1, 1);
     dim3 grid(length / block.x + 1, 1, 1);
     kmeans_plus_plus<<<grid, block, block.x * sizeof(float)>>>(
         length, cc, samples[devi].get() + offset * h_features_size,
         (*centroids)[devi].get(), (*dists)[devi].get(), (*dev_sums)[devi].get());
+  );
+  uint32_t dist_offset = 0;
+  FOR_EACH_DEVI(
+    uint32_t offset, length;
+    std::tie(offset, length) = plan[devi];
+    dim3 block(BS_KMPP, 1, 1);
+    dim3 grid(length / block.x + 1, 1, 1);
     CUCH(cudaMemcpyAsync(
         host_dists + offset, (*dists)[devi].get(),
         length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
@@ -694,9 +699,8 @@ KMCUDAResult kmeans_cuda_lloyd(
   for (int i = 1; ; i++) {
     if (!resume || i > 1) {
       FOR_EACH_DEVI(
-        auto &p = plans[devi];
-        auto offset = std::get<0>(p);
-        auto length = std::get<1>(p);
+        uint32_t offset, length;
+        std::tie(offset, length) = plans[devi];
         dim3 sgrid(length / sblock.x + 1, 1, 1);
         int shmem_size = shmem_sizes[devi];
         auto assigner = kmeans_assign_lloyd;
@@ -708,6 +712,10 @@ KMCUDAResult kmeans_cuda_lloyd(
             length, samples[devi].get() + offset * h_features_size,
             (*centroids)[devi].get(), (*assignments_prev)[devi].get() + offset,
             (*assignments)[devi].get() + offset);
+      );
+      FOR_EACH_DEVI(
+        uint32_t offset, length;
+        std::tie(offset, length) = plans[devi];
         FOR_OTHER_DEVS(
           CUP2P(assignments_prev, offset, length);
           CUP2P(assignments, offset, length);
@@ -725,20 +733,22 @@ KMCUDAResult kmeans_cuda_lloyd(
       }
     }
     FOR_EACH_DEVI(
-        auto &p = planc[devi];
-        auto offset = std::get<0>(p);
-        auto length = std::get<1>(p);
-        dim3 cgrid(length / cblock.x + 1, 1, 1);
-        kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
-            length, offset, samples[devi].get(),
-            (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
-            (*centroids)[devi].get(), (*ccounts)[devi].get());
-        FOR_OTHER_DEVS(
-          CUP2P(ccounts, offset, length);
-          CUP2P(centroids, offset * h_features_size, length * h_features_size);
-        );
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
+          length, offset, samples[devi].get(),
+          (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
+          (*centroids)[devi].get(), (*ccounts)[devi].get());
     );
-    SYNC_ALL_DEVS;
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      FOR_OTHER_DEVS(
+        CUP2P(ccounts, offset, length);
+        CUP2P(centroids, offset * h_features_size, length * h_features_size);
+      );
+    );
   }
 }
 
