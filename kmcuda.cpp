@@ -256,12 +256,15 @@ int kmeans_cuda(
   udevptrs<float> device_bounds_yy, device_drifts_yy, device_centroids_yy;
   if (yy_groups_size >= 1) {
     CUMALLOC(device_assignments_yy, clusters_size);
-    size_t yyb_size = static_cast<size_t>(samples_size) * (yy_groups_size + 1);
+    uint32_t max_length = max_distribute_length(
+        samples_size, features_size * sizeof(float), devs);
+    size_t yyb_size = static_cast<size_t>(max_length) * (yy_groups_size + 1);
     CUMALLOC(device_bounds_yy, yyb_size);
     CUMALLOC(device_drifts_yy, centroids_size + clusters_size);
-    CUMALLOC(device_passed_yy, samples_size);
+    max_length = std::max(max_length, clusters_size + yy_groups_size);
+    CUMALLOC(device_passed_yy, max_length);
     size_t yyc_size = yy_groups_size * features_size;
-    if (yyc_size + (clusters_size + yy_groups_size) <= samples_size) {
+    if (yyc_size + (clusters_size + yy_groups_size) <= max_length) {
       for (auto &p : device_passed_yy) {
         device_centroids_yy.emplace_back(
             reinterpret_cast<float*>(p.get()), true);

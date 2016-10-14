@@ -130,13 +130,13 @@ __global__ void kmeans_assign_lloyd_smallc(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      float dist = 0;
+      float pair = 0;
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        dist += shared_samples[soffset + f] * shared_centroids[coffset + f];
+        pair += shared_samples[soffset + f] * shared_centroids[coffset + f];
       }
-      dist = ssqr + csqrs[c - gc] - 2 * dist;
+      float dist = ssqr + csqrs[c - gc] - 2 * pair;
       if (dist < min_dist) {
         min_dist = dist;
         nearest = c;
@@ -209,13 +209,13 @@ __global__ void kmeans_assign_lloyd(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      float dist = 0;
+      float pair = 0;
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        dist += samples[f] * shared_centroids[coffset + f];
+        pair += samples[f] * shared_centroids[coffset + f];
       }
-      dist = ssqr + csqrs[c - gc] - 2 * dist;
+      float dist = ssqr + csqrs[c - gc] - 2 * pair;
       if (dist < min_dist) {
         min_dist = dist;
         nearest = c;
@@ -359,14 +359,16 @@ __global__ void kmeans_yy_init(
 }
 
 __global__ void kmeans_yy_calc_drifts(
-    const uint32_t border, const float *__restrict__ centroids,
-    float *__restrict__ drifts) {
+    const uint32_t border, const uint32_t offset,
+    const float *__restrict__ centroids, float *__restrict__ drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= border) {
     return;
   }
+  c += offset;
   uint32_t coffset = c * d_features_size;
   float sum = 0;
+  #pragma unroll 4
   for (uint32_t f = coffset; f < coffset + d_features_size; f++) {
     float d = centroids[f] - drifts[f];
     sum += d * d;
@@ -375,12 +377,13 @@ __global__ void kmeans_yy_calc_drifts(
 }
 
 __global__ void kmeans_yy_find_group_max_drifts(
-    const uint32_t border, const uint32_t *__restrict__ groups,
-    float *__restrict__ drifts) {
+    const uint32_t border, const uint32_t offset,
+    const uint32_t *__restrict__ groups, float *__restrict__ drifts) {
   uint32_t group = blockIdx.x * blockDim.x + threadIdx.x;
   if (group >= border) {
     return;
   }
+  group += offset;
   const uint32_t doffset = d_clusters_size * d_features_size;
   const uint32_t size_each = d_shmem_size /
       (2 * min(blockDim.x, border - blockIdx.x * blockDim.x));
@@ -463,12 +466,12 @@ __global__ void kmeans_yy_global_filter(
 }
 
 __global__ void kmeans_yy_local_filter(
-    const uint32_t border, const float *__restrict__ samples,
+    const float *__restrict__ samples,
     const uint32_t *__restrict__ passed, const float *__restrict__ centroids,
     const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
     uint32_t *__restrict__ assignments, float *__restrict__ bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= d_passed_number) {
     return;
   }
   sample = passed[sample];
@@ -483,7 +486,7 @@ __global__ void kmeans_yy_local_filter(
   extern __shared__ float shared_centroids[];
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
-      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+      min(blockDim.x, d_passed_number - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
     uint32_t coffset = gc * d_features_size;
@@ -605,6 +608,19 @@ static KMCUDAResult prepare_mem(
   return kmcudaSuccess;
 }
 
+static void print_plan(
+    const char *name, const std::vector<std::tuple<uint32_t, uint32_t>>& plan) {
+  printf("%s: [", name);
+  bool first = true;
+  for (auto& p : plan) {
+    if (!first) {
+      printf(", ");
+    }
+    first = false;
+    printf("(%" PRIu32 ", %" PRIu32 ")", std::get<0>(p), std::get<1>(p));
+  }
+  printf("]\n");
+}
 
 extern "C" {
 
@@ -694,10 +710,14 @@ KMCUDAResult kmeans_cuda_lloyd(
                      ccounts, assignments, &shmem_sizes));
   auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   auto planc = distribute(h_clusters_size, h_features_size * sizeof(float), devs);
+  if (verbosity > 1) {
+    print_plan("plans", plans);
+    print_plan("planc", planc);
+  }
   dim3 sblock(BS_LL_ASS, 1, 1);
   dim3 cblock(BS_LL_CNT, 1, 1);
-  for (int i = 1; ; i++) {
-    if (!resume || i > 1) {
+  for (int iter = 1; ; iter++) {
+    if (!resume || iter > 1) {
       FOR_EACH_DEVI(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
@@ -721,10 +741,10 @@ KMCUDAResult kmeans_cuda_lloyd(
           CUP2P(assignments, offset, length);
         );
       );
-      int status = check_changed(i, tolerance, h_samples_size, devs, verbosity);
+      int status = check_changed(iter, tolerance, h_samples_size, devs, verbosity);
       if (status < kmcudaSuccess) {
         if (iterations) {
-          *iterations = i;
+          *iterations = iter;
         }
         return kmcudaSuccess;
       }
@@ -790,22 +810,28 @@ KMCUDAResult kmeans_cuda_yy(
     CUCH(cudaMemcpyToSymbol(d_clusters_size, &h_yy_groups_size, sizeof(h_yy_groups_size)),
          kmcudaMemoryCopyError);
   );
-  udevptrs<float> tmpbufs, tmpbufs2;
-  for (auto &pyy : *passed_yy) {
-    tmpbufs.emplace_back(reinterpret_cast<float*>(pyy.get()) +
-        h_samples_size - h_clusters_size - h_yy_groups_size, true);
-    tmpbufs2.emplace_back(tmpbufs.back().get() + h_clusters_size, true);
+  {
+    udevptrs<float> tmpbufs, tmpbufs2;
+    auto max_slength = max_distribute_length(
+        h_samples_size, h_features_size * sizeof(float), devs);
+    for (auto &pyy : *passed_yy) {
+      // max_slength is guaranteed to be greater than or equal to
+      // h_clusters_size + h_yy_groups_size
+      tmpbufs.emplace_back(reinterpret_cast<float*>(pyy.get()) +
+          max_slength - h_clusters_size - h_yy_groups_size, true);
+      tmpbufs2.emplace_back(tmpbufs.back().get() + h_clusters_size, true);
+    }
+    RETERR(kmeans_init_centroids(
+        kmcudaInitMethodPlusPlus, h_clusters_size, h_features_size, h_yy_groups_size,
+        0, devs, -1, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy, centroids_yy),
+        INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
+           cudaGetErrorString(cudaGetLastError())));
+    RETERR(kmeans_cuda_lloyd(
+        YINYANG_GROUP_TOLERANCE, h_clusters_size, h_yy_groups_size, h_features_size,
+        false, devs, verbosity, *centroids, centroids_yy,
+        reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs2),
+        reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs), assignments_yy));
   }
-  RETERR(kmeans_init_centroids(
-      kmcudaInitMethodPlusPlus, h_clusters_size, h_features_size, h_yy_groups_size,
-      0, devs, -1, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy, centroids_yy),
-    INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
-         cudaGetErrorString(cudaGetLastError())));
-  RETERR(kmeans_cuda_lloyd(
-      YINYANG_GROUP_TOLERANCE, h_clusters_size, h_yy_groups_size, h_features_size,
-      false, devs, verbosity, *centroids, centroids_yy,
-      reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs2),
-      reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs), assignments_yy));
   FOR_EACH_DEV(
     CUCH(cudaMemcpyToSymbol(d_samples_size, &h_samples_size, sizeof(h_samples_size)),
          kmcudaMemoryCopyError);
@@ -816,19 +842,20 @@ KMCUDAResult kmeans_cuda_yy(
   RETERR(prepare_mem(h_samples_size, h_clusters_size, true, devs, verbosity,
                      ccounts, assignments, &shmem_sizes));
   dim3 siblock(BS_YY_INI, 1, 1);
-  dim3 sigrid(h_samples_size / siblock.x + 1, 1, 1);
   dim3 sgblock(BS_YY_GFL, 1, 1);
-  dim3 sggrid(h_samples_size / sgblock.x + 1, 1, 1);
   dim3 slblock(BS_YY_LFL, 1, 1);
-  dim3 slgrid(h_samples_size / slblock.x + 1, 1, 1);
   dim3 cblock(BS_LL_CNT, 1, 1);
-  dim3 cgrid(h_clusters_size / cblock.x + 1, 1, 1);
   dim3 gblock(BLOCK_SIZE, 1, 1);
-  dim3 ggrid(h_yy_groups_size / gblock.x + 1, 1, 1);
+  auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
+  auto planc = distribute(h_clusters_size, h_features_size * sizeof(float), devs);
+  auto plang = distribute(h_yy_groups_size, h_features_size * sizeof(float), devs);
+  if (verbosity > 1) {
+    print_plan("plans", plans);
+    print_plan("planc", planc);
+    print_plan("plang", plang);
+  }
   bool refresh = true;
   uint32_t h_passed_number = 0;
-  return kmcudaSuccess;
-  #if 0
   for (; ; iter++) {
     if (!refresh) {
       int status = check_changed(iter, tolerance, h_samples_size, devs, verbosity);
@@ -853,27 +880,94 @@ KMCUDAResult kmeans_cuda_yy(
     }
     if (refresh) {
       INFO("refreshing Yinyang bounds...\n");
-      kmeans_yy_init<<<sigrid, siblock, my_shmem_size>>>(
-          samples, centroids, assignments, assignments_yy, bounds_yy);
+      FOR_EACH_DEVI(
+        uint32_t offset, length;
+        std::tie(offset, length) = plans[devi];
+        dim3 sigrid(length / siblock.x + 1, 1, 1);
+        kmeans_yy_init<<<sigrid, siblock, shmem_sizes[devi]>>>(
+            length, samples[devi].get() + offset * h_features_size,
+            (*centroids)[devi].get(), (*assignments)[devi].get() + offset,
+            (*assignments_yy)[devi].get(), (*bounds_yy)[devi].get());
+      );
       refresh = false;
     }
-    CUCH(cudaMemcpyAsync(
-        drifts_yy, centroids, h_clusters_size * h_features_size * sizeof(float),
-        cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
-    kmeans_adjust<<<cblock, cgrid, my_shmem_size>>>(
-          samples, assignments_prev, assignments, centroids, ccounts);
-    kmeans_yy_calc_drifts<<<cblock, cgrid>>>(centroids, drifts_yy);
-    kmeans_yy_find_group_max_drifts<<<gblock, ggrid, my_shmem_size>>>(
-        assignments_yy, drifts_yy);
-    CUCH(cudaMemcpyToSymbolAsync(d_passed_number, &h_passed_number, sizeof(h_passed_number)),
-         kmcudaMemoryCopyError);
-    kmeans_yy_global_filter<<<sggrid, sgblock>>>(
-        samples, centroids, assignments_yy, drifts_yy, assignments,
-        assignments_prev, bounds_yy, passed_yy);
-    kmeans_yy_local_filter<<<slgrid, slblock, my_shmem_size>>>(
-        samples, passed_yy, centroids, assignments_yy, drifts_yy, assignments,
-        bounds_yy);
+    CUMEMCPY_D2D_ASYNC(*drifts_yy, 0, *centroids, 0, h_clusters_size * h_features_size);
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
+          length, offset, samples[devi].get(),
+          (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
+          (*centroids)[devi].get(), (*ccounts)[devi].get());
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      FOR_OTHER_DEVS(
+        CUP2P(ccounts, offset, length);
+        CUP2P(centroids, offset * h_features_size, length * h_features_size);
+      );
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      kmeans_yy_calc_drifts<<<cblock, cgrid>>>(
+          length, offset, (*centroids)[devi].get(), (*drifts_yy)[devi].get());
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = planc[devi];
+      FOR_OTHER_DEVS(
+        CUP2P(drifts_yy, h_clusters_size * h_features_size + offset, length);
+      );
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = plang[devi];
+      dim3 ggrid(length / gblock.x + 1, 1, 1);
+      kmeans_yy_find_group_max_drifts<<<gblock, ggrid, shmem_sizes[devi]>>>(
+          length, offset, (*assignments_yy)[devi].get(),
+          (*drifts_yy)[devi].get());
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = plang[devi];
+      FOR_OTHER_DEVS(
+        CUP2P(drifts_yy, offset, length);
+      );
+    );
+    FOR_EACH_DEV(
+      CUCH(cudaMemcpyToSymbolAsync(d_passed_number, &h_passed_number,
+                                   sizeof(h_passed_number)),
+           kmcudaMemoryCopyError);
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = plans[devi];
+      dim3 sggrid(length / sgblock.x + 1, 1, 1);
+      kmeans_yy_global_filter<<<sggrid, sgblock>>>(
+          length, samples[devi].get() + offset * h_features_size,
+          (*centroids)[devi].get(), (*assignments_yy)[devi].get(),
+          (*drifts_yy)[devi].get(), (*assignments)[devi].get() + offset,
+          (*assignments_prev)[devi].get() + offset,
+          (*bounds_yy)[devi].get(), (*passed_yy)[devi].get());
+      dim3 slgrid(length / slblock.x + 1, 1, 1);
+      kmeans_yy_local_filter<<<slgrid, slblock, shmem_sizes[devi]>>>(
+          samples[devi].get() + offset * h_features_size,
+          (*passed_yy)[devi].get(), (*centroids)[devi].get(),
+          (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
+          (*assignments)[devi].get() + offset, (*bounds_yy)[devi].get());
+    );
+    FOR_EACH_DEVI(
+      uint32_t offset, length;
+      std::tie(offset, length) = plans[devi];
+      FOR_OTHER_DEVS(
+        CUP2P(assignments_prev, offset, length);
+        CUP2P(assignments, offset, length);
+      );
+    );
   }
-  #endif
 }
-}
+}  // extern "C"

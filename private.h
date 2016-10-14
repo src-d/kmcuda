@@ -47,7 +47,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_D2H_ASYNC(dst, dst_stride, src, src_offset, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       dst + dst_stride * devi, (src)[devi].get() + src_offset, \
-      size * sizeof(std::remove_reference<decltype(src)>::type::value_type \
+      (size) * sizeof(std::remove_reference<decltype(src)>::type::value_type \
           ::element_type), \
       cudaMemcpyDeviceToHost), \
                      kmcudaMemoryCopyError)); \
@@ -61,7 +61,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_H2D_ASYNC(dst, dst_offset, src, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       (dst)[devi].get() + dst_offset, src, \
-      size * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
+      (size) * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
           ::element_type), \
       cudaMemcpyHostToDevice), \
                      kmcudaMemoryCopyError)); \
@@ -75,7 +75,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_D2D_ASYNC(dst, dst_offset, src, src_offset, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       (dst)[devi].get() + dst_offset, (src)[devi].get() + src_offset, \
-      size * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
+      (size) * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
           ::element_type), \
       cudaMemcpyDeviceToDevice), \
                      kmcudaMemoryCopyError)); \
@@ -90,7 +90,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
   void *__ptr; \
   CUCH(cudaMalloc( \
       &__ptr, \
-      size * sizeof(std::remove_reference<decltype(dest)>::type::value_type \
+      (size) * sizeof(std::remove_reference<decltype(dest)>::type::value_type \
           ::element_type)), \
        kmcudaMemoryCopyError, \
        INFO("failed to allocate %zu bytes for " name "\n", \
@@ -126,7 +126,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUP2P(what, offset, size) do { \
   CUCH(cudaMemcpyPeerAsync( \
       (*what)[odevi].get() + offset, devs[odevi], (*what)[devi].get() + offset, \
-      devs[devi], size * sizeof(std::remove_reference<decltype(*what)>::type \
+      devs[devi], (size) * sizeof(std::remove_reference<decltype(*what)>::type \
       ::value_type::element_type)), \
        kmcudaMemoryCopyError); \
 } while(false)
@@ -164,6 +164,19 @@ inline std::vector<std::tuple<uint32_t, uint32_t>> distribute(
   }
   res.emplace_back(offset, amount - offset);
   return std::move(res);
+}
+
+inline uint32_t max_distribute_length(
+    uint32_t amount, uint32_t size_each, const std::vector<int> &devs) {
+  auto plan = distribute(amount, size_each, devs);
+  uint32_t max_length = 0;
+  for (auto& p : plan) {
+    uint32_t length = std::get<1>(p);
+    if (length > max_length) {
+      max_length = length;
+    }
+  }
+  return max_length;
 }
 
 extern "C" {
