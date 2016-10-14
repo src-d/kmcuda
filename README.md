@@ -86,13 +86,15 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="kmeans++",
             or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
             In the latter case, negative device index means host pointer. Optionally,
             the tuple can be 2 items longer with preallocated device pointers for
-            centroids and assignments.
+            centroids and assignments. dtype must be float32.
 
 **clusters** integer, the number of clusters.
 
 **tolerance** float, if the relative number of reassignments drops below this value, stop.
 
-**init** string, sets initialization method, may be "kmeans++", "random" or "import".
+**init** string or numpy array, sets the method for centroids initialization,
+         may be "kmeans++", "random" or numpy array of shape \[**clusters**, number of features\].
+         dtype must be float32.
 
 **yinyang_t** float, the relative number of cluster groups, usually 0.1.
 

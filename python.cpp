@@ -47,44 +47,60 @@ using pyobj_parent = std::unique_ptr<PyObject, std::function<void(PyObject*)>>;
 
 class pyobj : public pyobj_parent {
  public:
+  pyobj() : pyobj_parent(
+      nullptr, [](PyObject *p){ if (p) Py_DECREF(p); }) {}
   explicit pyobj(PyObject *ptr) : pyobj_parent(
-      ptr, [](PyObject *p){ Py_DECREF(p); }) {}
+      ptr, [](PyObject *p){ if(p) Py_DECREF(p); }) {}
 };
 
 static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"kmeans++", kmcudaInitMethodPlusPlus},
-    {"random", kmcudaInitMethodRandom},
-    {"import", kmcudaInitMethodImport}
+    {"random", kmcudaInitMethodRandom}
 };
 
 static void set_cuda_malloc_error() {
   PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory on GPU");
 }
 
+static void set_cuda_device_error() {
+  PyErr_SetString(PyExc_ValueError, "No such CUDA device exists");
+}
+
+static void set_cuda_memcpy_error() {
+  PyErr_SetString(PyExc_RuntimeError, "cudaMemcpy failed");
+}
+
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0;
   float tolerance = .01, yinyang_t = .1;
-  const char *init = "kmeans++";
-  PyObject *samples_obj;
+  PyObject *samples_obj, *init_obj;
   static const char *kwlist[] = {
       "samples", "clusters", "tolerance", "init", "yinyang_t", "seed", "device",
       "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fsfIIi", const_cast<char**>(kwlist), &samples_obj,
-      &clusters_size, &tolerance, &init, &yinyang_t, &seed, &device,
+      args, kwargs, "OI|fOfIIi", const_cast<char**>(kwlist), &samples_obj,
+      &clusters_size, &tolerance, &init_obj, &yinyang_t, &seed, &device,
       &verbosity)) {
     return NULL;
   }
-  auto iminit = init_methods.find(init);
-  if (iminit == init_methods.end()) {
-    PyErr_SetString(
-        PyExc_ValueError,
-        "Unknown centroids initialization method. Supported values are "
-        "\"kmeans++\", \"random\" and \"import\".");
-    return NULL;
+
+  KMCUDAInitMethod init;
+  if (PyUnicode_Check(init_obj)) {
+    pyobj bytes(PyUnicode_AsASCIIString(init_obj));
+    auto iminit = init_methods.find(PyBytes_AsString(bytes.get()));
+    if (iminit == init_methods.end()) {
+      PyErr_SetString(
+          PyExc_ValueError,
+          "Unknown centroids initialization method. Supported values are "
+              "\"kmeans++\", \"random\" and <numpy array>.");
+      return NULL;
+    }
+    init = iminit->second;
+  } else {
+    init = kmcudaInitMethodImport;
   }
   if (device == 0) {
     PyErr_SetString(PyExc_ValueError, "\"device\" must be a binary device "
@@ -101,10 +117,17 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t samples_size = 0, features_size = 0;
   int device_ptrs = -1;
   if (PyTuple_Check(samples_obj)) {
+    auto size = PyTuple_GET_SIZE(samples_obj);
+    if (size != 3 && size != 5) {
+      PyErr_SetString(PyExc_ValueError,
+                      "len(\"samples\") must be either 3 or 5");
+      return NULL;
+    }
     auto member1 = PyTuple_GetItem(samples_obj, 0),
          member2 = PyTuple_GetItem(samples_obj, 1),
          member3 = PyTuple_GetItem(samples_obj, 2);
     if (!member1 || !member2 || !member3) {
+      PyErr_SetString(PyExc_RuntimeError, "\"samples\" tuple with nulls");
       return NULL;
     }
     samples = reinterpret_cast<float *>(static_cast<uintptr_t>(
@@ -114,17 +137,17 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       return NULL;
     }
     device_ptrs = PyLong_AsLong(member2);
-    if (!PyTuple_Check(member3)) {
+    if (!PyTuple_Check(member3) || PyTuple_GET_SIZE(member3) != 2) {
       PyErr_SetString(PyExc_TypeError, "\"samples\"[2] must be a shape tuple");
       return NULL;
     }
     samples_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 0));
     features_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 1));
-    if (PyTuple_GET_SIZE(samples_obj) > 3) {
+    if (size == 5) {
       auto member4 = PyTuple_GetItem(samples_obj, 3),
            member5 = PyTuple_GetItem(samples_obj, 4);
       if (!member4 || !member5) {
-        PyErr_SetString(PyExc_ValueError, "3 < len(\"samples\") < 5");
+        PyErr_SetString(PyExc_RuntimeError, "\"samples\" tuple with nulls");
         return NULL;
       }
       centroids = reinterpret_cast<float *>(static_cast<uintptr_t>(
@@ -156,16 +179,16 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     samples = reinterpret_cast<float *>(PyArray_DATA(
         reinterpret_cast<PyArrayObject *>(samples_array.get())));
   }
-  PyObject *centroids_array = nullptr, *assignments_array = nullptr;
+  pyobj centroids_array, assignments_array;
   if (device_ptrs < 0) {
     npy_intp centroid_dims[] = {clusters_size, features_size, 0};
-    centroids_array = PyArray_EMPTY(2, centroid_dims, NPY_FLOAT32, false);
+    centroids_array.reset(PyArray_EMPTY(2, centroid_dims, NPY_FLOAT32, false));
     centroids = reinterpret_cast<float *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(centroids_array)));
+        reinterpret_cast<PyArrayObject *>(centroids_array.get())));
     npy_intp assignments_dims[] = {samples_size, 0};
-    assignments_array = PyArray_EMPTY(1, assignments_dims, NPY_UINT32, false);
+    assignments_array.reset(PyArray_EMPTY(1, assignments_dims, NPY_UINT32, false));
     assignments = reinterpret_cast<uint32_t *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(assignments_array)));
+        reinterpret_cast<PyArrayObject *>(assignments_array.get())));
   } else if (centroids == nullptr) {
     if (cudaMalloc(reinterpret_cast<void **>(&centroids),
                    clusters_size * features_size * sizeof(float)) != cudaSuccess) {
@@ -178,10 +201,53 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       return NULL;
     }
   }
+  if (init == kmcudaInitMethodImport) {
+    pyobj import_centroids_array(PyArray_FROM_OTF(
+        init_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+    if (import_centroids_array == NULL) {
+      PyErr_SetString(PyExc_TypeError, "\"init\" centroids must be a 2D numpy array");
+      return NULL;
+    }
+    auto ndims = PyArray_NDIM(reinterpret_cast<PyArrayObject *>(
+        import_centroids_array.get()));
+    if (ndims != 2) {
+      PyErr_SetString(PyExc_ValueError, "\"init\" centroids must be a 2D numpy array");
+      return NULL;
+    }
+    auto dims = PyArray_DIMS(reinterpret_cast<PyArrayObject *>(
+        import_centroids_array.get()));
+    if (static_cast<uint32_t>(dims[0]) != clusters_size) {
+      PyErr_SetString(PyExc_ValueError,
+                      "\"init\" centroids shape[0] does not match "
+                      "the number of clusters");
+      return NULL;
+    }
+    if (static_cast<uint32_t>(dims[1]) != features_size) {
+      PyErr_SetString(PyExc_ValueError,
+                      "\"init\" centroids shape[1] does not match "
+                          "the number of features");
+      return NULL;
+    }
+    auto icd = reinterpret_cast<float *>(PyArray_DATA(
+        reinterpret_cast<PyArrayObject *>(import_centroids_array.get())));
+    auto size = clusters_size * features_size * sizeof(float);
+    if (device_ptrs < 0) {
+      memcpy(centroids, icd, size);
+    } else {
+      if (cudaSetDevice(device_ptrs) != cudaSuccess) {
+        set_cuda_device_error();
+        return NULL;
+      }
+      if (cudaMemcpy(centroids, icd, size, cudaMemcpyHostToDevice) != cudaSuccess) {
+        set_cuda_memcpy_error();
+        return NULL;
+      }
+    }
+  }
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
-      iminit->second, tolerance, yinyang_t, samples_size,
+      init, tolerance, yinyang_t, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
       device_ptrs, verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
@@ -192,20 +258,20 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
                       "Invalid arguments were passed to kmeans_cuda");
       return NULL;
     case kmcudaNoSuchDevice:
-      PyErr_SetString(PyExc_ValueError, "No such CUDA device exists");
+      set_cuda_device_error();
       return NULL;
     case kmcudaMemoryAllocationFailure:
       set_cuda_malloc_error();
       return NULL;
     case kmcudaMemoryCopyError:
-      PyErr_SetString(PyExc_RuntimeError, "cudaMemcpy failed");
+      set_cuda_memcpy_error();
       return NULL;
     case kmcudaRuntimeError:
       PyErr_SetString(PyExc_AssertionError, "kmeans_cuda failure (bug?)");
       return NULL;
     case kmcudaSuccess:
       if (device_ptrs < 0) {
-        return Py_BuildValue("OO", centroids_array, assignments_array);
+        return Py_BuildValue("OO", centroids_array.get(), assignments_array.get());
       }
       return Py_BuildValue(
           "KK",

@@ -127,9 +127,19 @@ KMCUDAResult kmeans_init_centroids(
         CUMEMCPY_H2D_ASYNC(*centroids, 0, host_centroids,
                            clusters_size * features_size);
       } else {
-        uint32_t devi = device_ptrs;
-        FOR_OTHER_DEVS(
-          CUP2P(centroids, 0, clusters_size * features_size);
+        long long origin_devi = -1;
+        FOR_EACH_DEVI(
+          if (devs[devi] == device_ptrs) {
+            origin_devi = devi;
+          }
+        );
+        FOR_EACH_DEVI(
+          if (static_cast<long long>(devi) != origin_devi) {
+            CUCH(cudaMemcpyPeerAsync(
+                (*centroids)[devi].get(), devs[devi], host_centroids,
+                device_ptrs, clusters_size * features_size * sizeof(float)),
+                 kmcudaMemoryCopyError);
+          }
         );
       }
     case kmcudaInitMethodRandom:
