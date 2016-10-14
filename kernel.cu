@@ -756,7 +756,7 @@ KMCUDAResult kmeans_cuda_lloyd(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
+      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
           (*centroids)[devi].get(), (*ccounts)[devi].get());
@@ -896,7 +896,7 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cblock, cgrid, shmem_sizes[devi]>>>(
+      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
           (*centroids)[devi].get(), (*ccounts)[devi].get());
@@ -913,7 +913,7 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_yy_calc_drifts<<<cblock, cgrid>>>(
+      kmeans_yy_calc_drifts<<<cgrid, cblock>>>(
           length, offset, (*centroids)[devi].get(), (*drifts_yy)[devi].get());
     );
     FOR_EACH_DEVI(
@@ -927,7 +927,7 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = plang[devi];
       dim3 ggrid(length / gblock.x + 1, 1, 1);
-      kmeans_yy_find_group_max_drifts<<<gblock, ggrid, shmem_sizes[devi]>>>(
+      kmeans_yy_find_group_max_drifts<<<ggrid, gblock, shmem_sizes[devi]>>>(
           length, offset, (*assignments_yy)[devi].get(),
           (*drifts_yy)[devi].get());
     );
