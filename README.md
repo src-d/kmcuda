@@ -79,35 +79,37 @@ You should see something like this:
 Python API
 ----------
 ```python
-def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False,
+def kmeans_cuda(samples, clusters, tolerance=0.0, init="kmeans++",
                 yinyang_t=0.1, seed=time(), device=0, verbosity=0)
 ```
 **samples** numpy array of shape [number of samples, number of features]
 
-**clusters** the number of clusters
+**clusters** the number of clusters.
 
-**tolerance** if the relative number of reassignments drops below this value, stop
+**tolerance** if the relative number of reassignments drops below this value, stop.
 
-**kmpp** boolean, indicates whether to do kmeans++ initialization
+**init** string, sets initialization method, may be "kmeans++", "random" or "import"
 
 **yinyang_t** the relative number of cluster groups, usually 0.1.
 
-**seed** random generator seed for reproducible results
+**seed** random generator seed for reproducible results.
 
-**device** integer, CUDA device index
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
+           3 means using first and second device. Default value is 1.
 
-**verbosity** 0 means complete silence, 1 means mere progress logging, 2 means lots of output
+**verbosity** integer, 0 means complete silence, 1 means mere progress logging,
+              2 means lots of output
 
 C API
 -----
 ```C
-int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
-                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
-                uint32_t device, int32_t verbosity, const float *samples,
-                float *centroids, uint32_t *assignments)
+int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
+                uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+                uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
+                const float *samples, float *centroids, uint32_t *assignments)
 ```
-**kmpp** indicates whether to do kmeans++ initialization. If false,
-ordinary random centroids will be picked.
+**init** specifies the centroids initialization method: kmeans++, random or import
+         (in the latter case, **centroids** is read).
 
 **tolerance** if the number of reassignments drop below this ratio, stop.
 
@@ -121,7 +123,15 @@ ordinary random centroids will be picked.
 
 **seed** random generator seed passed to srand().
 
-**device** CUDA device index - usually 0.
+**device** CUDA device OR-ed indices - usually 1. For example, 1 means using first device,
+           2 means second device, 3 means first and second device (2x speedup).
+
+**device_ptrs** configures the location of input and output. If it is negative,
+                samples and returned arrays are on host, otherwise, they belong to the
+                corresponding device. E.g., if device_ptrs is 0, **samples** is expected
+                to be a pointer to device #0's memory and the resulting **centroids** and
+                **assignments** are expected to be preallocated on device #0 as well.
+                Usually the value is -1.
 
 **verbosity** 0 - no output; 1 - progress output; >=2 - debug output.
 

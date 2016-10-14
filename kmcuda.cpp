@@ -48,7 +48,7 @@ static int check_args(
   return kmcudaSuccess;
 }
 
-static std::vector<int> setup_devices(uint32_t device, int verbosity) {
+static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verbosity) {
   std::vector<int> devs;
   for (int dev = 0; device; dev++) {
     if (device & 1) {
@@ -59,6 +59,10 @@ static std::vector<int> setup_devices(uint32_t device, int verbosity) {
       }
     }
     device >>= 1;
+  }
+  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+    // enable p2p for device_ptrs which is not in the devices list
+    devs.push_back(device_ptrs);
   }
   if (devs.size() > 1) {
     for (int dev1 : devs) {
@@ -85,6 +89,10 @@ static std::vector<int> setup_devices(uint32_t device, int verbosity) {
         }
       }
     }
+  }
+  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+    // remove device_ptrs - it is not in the devices list
+    devs.pop_back();
   }
   return std::move(devs);
 }
@@ -214,25 +222,34 @@ int kmeans_cuda(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
       device, samples, centroids, assignments));
   INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
-  auto devs = setup_devices(device, verbosity);
+  auto devs = setup_devices(device, device_ptrs, verbosity);
   if (devs.empty()) {
     return kmcudaNoSuchDevice;
   }
   udevptrs<float> device_samples;
   size_t device_samples_size = static_cast<size_t>(samples_size) * features_size;
-  if (device_ptrs < 0) {
-    CUMALLOC(device_samples, device_samples_size);
+  int origin_devi = -1;
+  FOR_EACH_DEVI(
+    if (devs[devi] == device_ptrs) {
+      device_samples.emplace_back(const_cast<float*>(samples), true);
+      origin_devi = devi;
+    } else {
+      CUMALLOC_ONE(device_samples, device_samples_size);
+    }
+  );
+  if (origin_devi < 0) {
     CUMEMCPY_H2D_ASYNC(device_samples, 0, samples, device_samples_size);
   } else {
-    device_samples.emplace_back(const_cast<float*>(samples), true);
+    size_t devi = origin_devi;
+    FOR_OTHER_DEVS(
+      CUP2P(&device_samples, 0, device_samples_size);
+    );
   }
   udevptrs<float> device_centroids;
   size_t centroids_size = static_cast<size_t>(clusters_size) * features_size;
-  bool must_copy_result = true;
   FOR_EACH_DEV(
     if (dev == device_ptrs) {
       device_centroids.emplace_back(centroids, true);
-      must_copy_result = false;
     } else {
       CUMALLOC_ONE(device_centroids, centroids_size);
     }
@@ -299,7 +316,7 @@ int kmeans_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStop());
   #endif
-  if (must_copy_result) {
+  if (origin_devi < 0) {
     if (device_ptrs < 0) {
       CUCH(cudaMemcpy(centroids, device_centroids[0].get(),
                       centroids_size * sizeof(float), cudaMemcpyDeviceToHost),

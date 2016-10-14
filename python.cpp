@@ -58,7 +58,7 @@ static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
 };
 
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
-  uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 0;
+  uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0, device_ptrs = -1;
   float tolerance = .01, yinyang_t = .1;
   const char *init = "kmeans++";
