@@ -228,7 +228,7 @@ int kmeans_cuda(
   }
   udevptrs<float> device_samples;
   size_t device_samples_size = static_cast<size_t>(samples_size) * features_size;
-  int origin_devi = -1;
+  long long origin_devi = -1;
   FOR_EACH_DEVI(
     if (devs[devi] == device_ptrs) {
       device_samples.emplace_back(const_cast<float*>(samples), true);
@@ -237,12 +237,16 @@ int kmeans_cuda(
       CUMALLOC_ONE(device_samples, device_samples_size);
     }
   );
-  if (origin_devi < 0) {
+  if (device_ptrs < 0) {
     CUMEMCPY_H2D_ASYNC(device_samples, 0, samples, device_samples_size);
   } else {
-    size_t devi = origin_devi;
-    FOR_OTHER_DEVS(
-      CUP2P(&device_samples, 0, device_samples_size);
+    FOR_EACH_DEVI(
+      if (static_cast<long long>(devi) != origin_devi) {
+        CUCH(cudaMemcpyPeerAsync(
+            device_samples[devi].get(), devs[devi], samples,
+            device_ptrs, device_samples_size * sizeof(float)),
+             kmcudaMemoryCopyError);
+      }
     );
   }
   udevptrs<float> device_centroids;
@@ -318,17 +322,17 @@ int kmeans_cuda(
   #endif
   if (origin_devi < 0) {
     if (device_ptrs < 0) {
-      CUCH(cudaMemcpy(centroids, device_centroids[0].get(),
+      CUCH(cudaMemcpy(centroids, device_centroids[devs.back()].get(),
                       centroids_size * sizeof(float), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
-      CUCH(cudaMemcpy(assignments, device_assignments[0].get(),
+      CUCH(cudaMemcpy(assignments, device_assignments[devs.back()].get(),
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
-      CUCH(cudaMemcpyPeer(centroids, device_ptrs, device_centroids[0].get(),
+      CUCH(cudaMemcpyPeer(centroids, device_ptrs, device_centroids[devs.back()].get(),
                           devs[0], centroids_size * sizeof(float)),
            kmcudaMemoryCopyError);
-      CUCH(cudaMemcpyPeer(assignments, device_ptrs, device_assignments[0].get(),
+      CUCH(cudaMemcpyPeer(assignments, device_ptrs, device_assignments[devs.back()].get(),
                           devs[0], samples_size * sizeof(uint32_t)),
            kmcudaMemoryCopyError);
     }

@@ -1,9 +1,9 @@
 #include <memory>
-#include <string>
 #include <unordered_map>
 #include <Python.h>
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
+#include <cuda_runtime_api.h>
 #include "kmcuda.h"
 
 static char module_docstring[] =
@@ -57,21 +57,25 @@ static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"import", kmcudaInitMethodImport}
 };
 
+static void set_cuda_malloc_error() {
+  PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory on GPU");
+}
+
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
-  int32_t verbosity = 0, device_ptrs = -1;
+  int32_t verbosity = 0;
   float tolerance = .01, yinyang_t = .1;
   const char *init = "kmeans++";
   PyObject *samples_obj;
   static const char *kwlist[] = {
-      "samples", "clusters", "tolerance", "init", "yinyang_t", "seed",
-      "device", "device_ptrs", "verbosity", NULL};
+      "samples", "clusters", "tolerance", "init", "yinyang_t", "seed", "device",
+      "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fsfIIii", const_cast<char**>(kwlist), &samples_obj,
+      args, kwargs, "OI|fsfIIi", const_cast<char**>(kwlist), &samples_obj,
       &clusters_size, &tolerance, &init, &yinyang_t, &seed, &device,
-      &device_ptrs, &verbosity)) {
+      &verbosity)) {
     return NULL;
   }
   auto iminit = init_methods.find(init);
@@ -92,37 +96,88 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
                                       "less than (1 << 32) - 1");
     return NULL;
   }
-  pyobj samples_array(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
-  if (samples_array == NULL) {
-    PyErr_SetString(PyExc_TypeError, "\"samples\" must be a 2D numpy array");
-    return NULL;
+  float *samples = nullptr, *centroids = nullptr;
+  uint32_t *assignments = nullptr;
+  uint32_t samples_size = 0, features_size = 0;
+  int device_ptrs = -1;
+  if (PyTuple_Check(samples_obj)) {
+    auto member1 = PyTuple_GetItem(samples_obj, 0),
+         member2 = PyTuple_GetItem(samples_obj, 1),
+         member3 = PyTuple_GetItem(samples_obj, 2);
+    if (!member1 || !member2 || !member3) {
+      return NULL;
+    }
+    samples = reinterpret_cast<float *>(static_cast<uintptr_t>(
+        PyLong_AsUnsignedLongLong(member1)));
+    if (samples == nullptr) {
+      PyErr_SetString(PyExc_ValueError, "\"samples\"[0] is null");
+      return NULL;
+    }
+    device_ptrs = PyLong_AsLong(member2);
+    if (!PyTuple_Check(member3)) {
+      PyErr_SetString(PyExc_TypeError, "\"samples\"[2] must be a shape tuple");
+      return NULL;
+    }
+    samples_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 0));
+    features_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 1));
+    if (PyTuple_GET_SIZE(samples_obj) > 3) {
+      auto member4 = PyTuple_GetItem(samples_obj, 3),
+           member5 = PyTuple_GetItem(samples_obj, 4);
+      if (!member4 || !member5) {
+        PyErr_SetString(PyExc_ValueError, "3 < len(\"samples\") < 5");
+        return NULL;
+      }
+      centroids = reinterpret_cast<float *>(static_cast<uintptr_t>(
+          PyLong_AsUnsignedLongLong(member4)));
+      assignments = reinterpret_cast<uint32_t *>(static_cast<uintptr_t>(
+          PyLong_AsUnsignedLongLong(member5)));
+    }
+  } else {
+    pyobj samples_array(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+    if (samples_array == NULL) {
+      PyErr_SetString(PyExc_TypeError, "\"samples\" must be a 2D numpy array");
+      return NULL;
+    }
+    auto ndims = PyArray_NDIM(reinterpret_cast<PyArrayObject *>(samples_array.get()));
+    if (ndims != 2) {
+      PyErr_SetString(PyExc_ValueError, "\"samples\" must be a 2D numpy array");
+      return NULL;
+    }
+    auto dims = PyArray_DIMS(reinterpret_cast<PyArrayObject *>(samples_array.get()));
+    samples_size = static_cast<uint32_t>(dims[0]);
+    features_size = static_cast<uint32_t>(dims[1]);
+    if (features_size > UINT16_MAX) {
+      char msg[128];
+      sprintf(msg, "\"samples\": more than %" PRIu32 " features is not supported",
+              features_size);
+      PyErr_SetString(PyExc_ValueError, msg);
+      return NULL;
+    }
+    samples = reinterpret_cast<float *>(PyArray_DATA(
+        reinterpret_cast<PyArrayObject *>(samples_array.get())));
   }
-  auto ndims = PyArray_NDIM(reinterpret_cast<PyArrayObject*>(samples_array.get()));
-  if (ndims != 2) {
-    PyErr_SetString(PyExc_ValueError, "\"samples\" must be a 2D numpy array");
-    return NULL;
+  PyObject *centroids_array = nullptr, *assignments_array = nullptr;
+  if (device_ptrs < 0) {
+    npy_intp centroid_dims[] = {clusters_size, features_size, 0};
+    centroids_array = PyArray_EMPTY(2, centroid_dims, NPY_FLOAT32, false);
+    centroids = reinterpret_cast<float *>(PyArray_DATA(
+        reinterpret_cast<PyArrayObject *>(centroids_array)));
+    npy_intp assignments_dims[] = {samples_size, 0};
+    assignments_array = PyArray_EMPTY(1, assignments_dims, NPY_UINT32, false);
+    assignments = reinterpret_cast<uint32_t *>(PyArray_DATA(
+        reinterpret_cast<PyArrayObject *>(assignments_array)));
+  } else if (centroids == nullptr) {
+    if (cudaMalloc(reinterpret_cast<void **>(&centroids),
+                   clusters_size * features_size * sizeof(float)) != cudaSuccess) {
+      set_cuda_malloc_error();
+      return NULL;
+    }
+    if (cudaMalloc(reinterpret_cast<void **>(&assignments),
+                   samples_size * sizeof(uint32_t)) != cudaSuccess) {
+      set_cuda_malloc_error();
+      return NULL;
+    }
   }
-  auto dims = PyArray_DIMS(reinterpret_cast<PyArrayObject*>(samples_array.get()));
-  uint32_t samples_size = static_cast<uint32_t>(dims[0]);
-  uint32_t features_size = static_cast<uint32_t>(dims[1]);
-  if (features_size > UINT16_MAX) {
-    char msg[128];
-    sprintf(msg, "\"samples\": more than %" PRIu32 " features is not supported",
-            features_size);
-    PyErr_SetString(PyExc_ValueError, msg);
-    return NULL;
-  }
-  float *samples = reinterpret_cast<float*>(PyArray_DATA(
-      reinterpret_cast<PyArrayObject*>(samples_array.get())));
-  npy_intp centroid_dims[] = {clusters_size, features_size, 0};
-  auto centroids_array = PyArray_EMPTY(2, centroid_dims, NPY_FLOAT32, false);
-  float *centroids = reinterpret_cast<float*>(PyArray_DATA(
-      reinterpret_cast<PyArrayObject*>(centroids_array)));
-  npy_intp assignments_dims[] = {samples_size, 0};
-  auto assignments_array = PyArray_EMPTY(1, assignments_dims, NPY_UINT32, false);
-  uint32_t *assignments = reinterpret_cast<uint32_t*>(PyArray_DATA(
-      reinterpret_cast<PyArrayObject*>(assignments_array)));
-
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
@@ -140,8 +195,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       PyErr_SetString(PyExc_ValueError, "No such CUDA device exists");
       return NULL;
     case kmcudaMemoryAllocationFailure:
-      PyErr_SetString(PyExc_MemoryError,
-                      "Failed to allocate memory on GPU");
+      set_cuda_malloc_error();
       return NULL;
     case kmcudaMemoryCopyError:
       PyErr_SetString(PyExc_RuntimeError, "cudaMemcpy failed");
@@ -150,7 +204,13 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       PyErr_SetString(PyExc_AssertionError, "kmeans_cuda failure (bug?)");
       return NULL;
     case kmcudaSuccess:
-      return Py_BuildValue("OO", centroids_array, assignments_array);
+      if (device_ptrs < 0) {
+        return Py_BuildValue("OO", centroids_array, assignments_array);
+      }
+      return Py_BuildValue(
+          "KK",
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(centroids)),
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(assignments)));
     default:
       PyErr_SetString(PyExc_AssertionError,
                       "Unknown error code returned from kmeans_cuda");

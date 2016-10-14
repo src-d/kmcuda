@@ -68,7 +68,7 @@ arr[:2500] = numpy.random.rand(2500, 2) + [0, 2]
 arr[2500:5000] = numpy.random.rand(2500, 2) - [0, 2]
 arr[5000:7500] = numpy.random.rand(2500, 2) + [2, 0]
 arr[7500:] = numpy.random.rand(2500, 2) - [2, 0]
-centroids, assignments = kmeans_cuda(arr, 4, kmpp=True, verbosity=1, seed=3)
+centroids, assignments = kmeans_cuda(arr, 4, verbosity=1, seed=3)
 print(centroids)
 pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
 pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
@@ -82,23 +82,31 @@ Python API
 def kmeans_cuda(samples, clusters, tolerance=0.0, init="kmeans++",
                 yinyang_t=0.1, seed=time(), device=0, verbosity=0)
 ```
-**samples** numpy array of shape [number of samples, number of features]
+**samples** numpy array of shape \[number of samples, number of features\]
+            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
+            In the latter case, negative device index means host pointer. Optionally,
+            the tuple can be 2 items longer with preallocated device pointers for
+            centroids and assignments.
 
-**clusters** the number of clusters.
+**clusters** integer, the number of clusters.
 
-**tolerance** if the relative number of reassignments drops below this value, stop.
+**tolerance** float, if the relative number of reassignments drops below this value, stop.
 
-**init** string, sets initialization method, may be "kmeans++", "random" or "import"
+**init** string, sets initialization method, may be "kmeans++", "random" or "import".
 
-**yinyang_t** the relative number of cluster groups, usually 0.1.
+**yinyang_t** float, the relative number of cluster groups, usually 0.1.
 
-**seed** random generator seed for reproducible results.
+**seed** integer, random generator seed for reproducible results.
 
 **device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
            3 means using first and second device. Default value is 1.
 
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
-              2 means lots of output
+              2 means lots of output.
+              
+ **return** tuple(centroids, assignments). If **samples** was a numpy array or
+            a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
+            (integers) allocated on the same device.
 
 C API
 -----

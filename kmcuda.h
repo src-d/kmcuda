@@ -20,7 +20,7 @@ enum KMCUDAInitMethod {
 
 extern "C" {
 /// @brief Performs K-means clustering on GPU / CUDA.
-/// @param init Selects the centroids initialization method.
+/// @param init centroids initialization method.
 /// @param tolerance if the number of reassignments drop below this ratio, stop.
 /// @param yinyang_t the relative number of cluster groups, usually 0.1.
 /// @param samples_size number of samples.
