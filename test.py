@@ -1,3 +1,4 @@
+import sys
 import unittest
 
 import numpy
@@ -21,6 +22,14 @@ class KMCUDATests(unittest.TestCase):
         super(KMCUDATests, self).setUp()
         numpy.random.seed(0)
 
+    def test_random_lloyd(self):
+        centroids, assignments = kmeans_cuda(
+            self.samples, 50, init="random", device=1,
+            verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(sys.getrefcount(centroids), 2)
+        self.assertEqual(sys.getrefcount(assignments), 2)
+        self.assertEqual(sys.getrefcount(self.samples), 2)
+
     def test_kmeanspp_lloyd(self):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init="kmeans++", device=1,
@@ -29,12 +38,7 @@ class KMCUDATests(unittest.TestCase):
     def test_kmeanspp_yinyang(self):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init="kmeans++", device=1,
-            verbosity=2, seed=3, tolerance=0.05, yinyang_t=0.1)
-
-    def test_random_lloyd(self):
-        centroids, assignments = kmeans_cuda(
-            self.samples, 50, init="random", device=1,
-            verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+            verbosity=2, seed=3, tolerance=0.01, yinyang_t=0.1)
 
     def test_import_lloyd(self):
         centroids, assignments = kmeans_cuda(
@@ -43,3 +47,6 @@ class KMCUDATests(unittest.TestCase):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init=centroids, device=1,
             verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+
+if __name__ == "__main__":
+    unittest.main()
