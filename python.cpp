@@ -55,6 +55,7 @@ class pyobj : public pyobj_parent {
 
 static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"kmeans++", kmcudaInitMethodPlusPlus},
+    {"k-means++", kmcudaInitMethodPlusPlus},
     {"random", kmcudaInitMethodRandom}
 };
 

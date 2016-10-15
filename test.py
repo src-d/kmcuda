@@ -3,6 +3,7 @@ import unittest
 
 import numpy
 from libKMCUDA import kmeans_cuda
+from sklearn.cluster import KMeans
 
 
 class KMCUDATests(unittest.TestCase):
@@ -22,6 +23,16 @@ class KMCUDATests(unittest.TestCase):
         super(KMCUDATests, self).setUp()
         numpy.random.seed(0)
 
+    @staticmethod
+    def _reference(centroids):
+        return KMeans(50, max_iter=1, init=centroids, n_init=1)
+
+    def _validate(self, centroids, assignments, tolerance):
+        ref = self._reference(centroids)
+        next_asses = ref.fit_predict(self.samples)
+        reasses = sum(assignments != next_asses)
+        self.assertLess(reasses / len(self.samples), tolerance)
+
     def test_random_lloyd(self):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init="random", device=1,
@@ -29,16 +40,21 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(sys.getrefcount(centroids), 2)
         self.assertEqual(sys.getrefcount(assignments), 2)
         self.assertEqual(sys.getrefcount(self.samples), 2)
+        self.assertEqual(centroids.shape, (50, 2))
+        self.assertEqual(assignments.shape, (13000,))
+        self._validate(centroids, assignments, 0.05)
 
     def test_kmeanspp_lloyd(self):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init="kmeans++", device=1,
             verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self._validate(centroids, assignments, 0.05)
 
     def test_kmeanspp_yinyang(self):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init="kmeans++", device=1,
             verbosity=2, seed=3, tolerance=0.01, yinyang_t=0.1)
+        self._validate(centroids, assignments, 0.01)
 
     def test_import_lloyd(self):
         centroids, assignments = kmeans_cuda(
@@ -47,6 +63,7 @@ class KMCUDATests(unittest.TestCase):
         centroids, assignments = kmeans_cuda(
             self.samples, 50, init=centroids, device=1,
             verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self._validate(centroids, assignments, 0.05)
 
 if __name__ == "__main__":
     unittest.main()

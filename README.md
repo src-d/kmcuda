@@ -13,7 +13,7 @@ kmcuda can sort 4M samples in 480 dimensions into 40000 clusters (if you
 have several days and 12 GB of GPU memory). 300K samples are grouped
 into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
-Three centroid initialization ways are supported: random, kmeans++ and import.
+Three centroid initialization ways are supported: random, k-means++ and import.
 If you've got several GPUs, they can be utilized together and it gives the
 corresponding linear speedup either for Lloyd or Yinyang.
 
@@ -81,7 +81,7 @@ You should see something like this:
 Python API
 ----------
 ```python
-def kmeans_cuda(samples, clusters, tolerance=0.0, init="kmeans++",
+def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
                 yinyang_t=0.1, seed=time(), device=0, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
@@ -95,8 +95,8 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="kmeans++",
 **tolerance** float, if the relative number of reassignments drops below this value, stop.
 
 **init** string or numpy array, sets the method for centroids initialization,
-         may be "kmeans++", "random" or numpy array of shape \[**clusters**, number of features\].
-         dtype must be float32.
+         may be "k=means++"/"kmeans++", "random" or numpy array of shape
+         \[**clusters**, number of features\]. dtype must be float32.
 
 **yinyang_t** float, the relative number of cluster groups, usually 0.1.
 
@@ -120,7 +120,7 @@ int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
                 uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
                 const float *samples, float *centroids, uint32_t *assignments)
 ```
-**init** specifies the centroids initialization method: kmeans++, random or import
+**init** specifies the centroids initialization method: k-means++, random or import
          (in the latter case, **centroids** is read).
 
 **tolerance** if the number of reassignments drop below this ratio, stop.
