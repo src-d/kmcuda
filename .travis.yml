@@ -8,7 +8,7 @@ before_install:
 before_script:
   - mkdir build
   - cd build
-  - cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+  - cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0 ..
 
 script:
-  - make -j2
+  - make -j2 VERBOSE=1
