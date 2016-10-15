@@ -1,0 +1,14 @@
+language: cpp
+dist: trusty
+sudo: required
+
+before_install:
+  - . .travis.setup
+
+before_script:
+  - mkdir build
+  - cd build
+  - cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+
+script:
+  - make -j2
