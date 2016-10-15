@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda)
+
 "Yinyang" K-means using NVIDIA CUDA
 ===================================
 
