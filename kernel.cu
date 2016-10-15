@@ -385,12 +385,12 @@ __global__ void kmeans_yy_find_group_max_drifts(
   }
   group += offset;
   const uint32_t doffset = d_clusters_size * d_features_size;
+  const uint32_t step = d_shmem_size / 2;
   const uint32_t size_each = d_shmem_size /
       (2 * min(blockDim.x, border - blockIdx.x * blockDim.x));
-  const uint32_t step = size_each * blockDim.x;
   extern __shared__ uint32_t shmem[];
   float *cd = (float *)shmem;
-  uint32_t *cg = shmem + d_shmem_size / 2;
+  uint32_t *cg = shmem + step;
   float my_max = FLT_MIN;
   for (uint32_t offset = 0; offset < d_clusters_size; offset += step) {
     __syncthreads();
