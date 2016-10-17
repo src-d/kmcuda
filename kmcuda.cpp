@@ -350,12 +350,15 @@ int kmeans_cuda(
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
-      CUCH(cudaMemcpyPeer(centroids, device_ptrs, device_centroids[devs.back()].get(),
-                          devs[0], centroids_size * sizeof(float)),
+      CUCH(cudaMemcpyPeer(centroids, device_ptrs,
+                          device_centroids[devs.size() - 1].get(),
+                          devs.back(), centroids_size * sizeof(float)),
            kmcudaMemoryCopyError);
-      CUCH(cudaMemcpyPeer(assignments, device_ptrs, device_assignments[devs.back()].get(),
-                          devs[0], samples_size * sizeof(uint32_t)),
+      CUCH(cudaMemcpyPeer(assignments, device_ptrs,
+                          device_assignments[devs.size() - 1].get(),
+                          devs.back(), samples_size * sizeof(uint32_t)),
            kmcudaMemoryCopyError);
+      SYNC_ALL_DEVS;
     }
   }
   DEBUG("return kmcudaSuccess\n");

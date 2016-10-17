@@ -192,6 +192,10 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     assignments = reinterpret_cast<uint32_t *>(PyArray_DATA(
         reinterpret_cast<PyArrayObject *>(assignments_array.get())));
   } else if (centroids == nullptr) {
+    if (cudaSetDevice(device_ptrs) != cudaSuccess) {
+      set_cuda_device_error();
+      return NULL;
+    }
     if (cudaMalloc(reinterpret_cast<void **>(&centroids),
                    clusters_size * features_size * sizeof(float)) != cudaSuccess) {
       set_cuda_malloc_error();
