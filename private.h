@@ -14,6 +14,7 @@
 do { \
   auto __res = cuda_call; \
   if (__res != 0) { \
+    DEBUG("%s\n", #cuda_call); \
     INFO("%s:%d -> %s\n", __FILE__, __LINE__, cudaGetErrorString(__res)); \
     __VA_ARGS__; \
     return ret; \

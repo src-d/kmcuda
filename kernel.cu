@@ -586,7 +586,7 @@ static int check_changed(int iter, float tolerance, uint32_t h_samples_size,
 static KMCUDAResult prepare_mem(
     uint32_t h_samples_size, uint32_t h_clusters_size, bool resume,
     const std::vector<int> &devs, int verbosity, udevptrs<uint32_t> *ccounts,
-    udevptrs<uint32_t> *assignments,  std::vector<uint32_t> *shmem_sizes) {
+    udevptrs<uint32_t> *assignments, std::vector<uint32_t> *shmem_sizes) {
   uint32_t zero = 0;
   shmem_sizes->clear();
   FOR_EACH_DEVI(
