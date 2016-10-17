@@ -28,7 +28,7 @@ static int check_args(
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
   }
-  if (device == 0) {
+  if (device < 0) {
     return kmcudaNoSuchDevice;
   }
   int devices = 0;
@@ -50,6 +50,13 @@ static int check_args(
 
 static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verbosity) {
   std::vector<int> devs;
+  if (device == 0) {
+    cudaGetDeviceCount(reinterpret_cast<int *>(&device));
+    if (device == 0) {
+      return std::move(devs);
+    }
+    device = (1u << device) - 1;
+  }
   for (int dev = 0; device; dev++) {
     if (device & 1) {
       devs.push_back(dev);

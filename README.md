@@ -105,7 +105,8 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 **seed** integer, random generator seed for reproducible results.
 
 **device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
-           3 means using first and second device. Default value is 1.
+           3 means using first and second device. Special value 0 enables all available devices.
+           Default value is 1.
 
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
               2 means lots of output.
@@ -138,7 +139,8 @@ int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
 **seed** random generator seed passed to srand().
 
 **device** CUDA device OR-ed indices - usually 1. For example, 1 means using first device,
-           2 means second device, 3 means first and second device (2x speedup).
+           2 means second device, 3 means first and second device (2x speedup). Special
+           value 0 enables all available devices.
 
 **device_ptrs** configures the location of input and output. If it is negative,
                 samples and returned arrays are on host, otherwise, they belong to the

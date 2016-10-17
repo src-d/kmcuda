@@ -103,9 +103,10 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   } else {
     init = kmcudaInitMethodImport;
   }
-  if (device == 0) {
+  if (device < 0) {
     PyErr_SetString(PyExc_ValueError, "\"device\" must be a binary device "
-        "selection mask where 1 on n-th place activates n-th device");
+        "selection mask where 1 on n-th place activates n-th device; 0 "
+        "activates all available devices.");
     return NULL;
   }
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
