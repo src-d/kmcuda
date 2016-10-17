@@ -156,17 +156,17 @@ KMCUDAResult kmeans_init_centroids(
     case kmcudaInitMethodRandom:
       INFO("randomly picking initial centroids...\n");
       for (uint32_t c = 0; c < clusters_size; c++) {
+        auto rnd = rand() % samples_size;
         if ((c + 1) % 1000 == 0 || c == clusters_size - 1) {
           INFO("\rcentroid #%" PRIu32, c + 1);
           fflush(stdout);
           CUMEMCPY_D2D(
               *centroids, c * features_size, samples,
-              (rand() % samples_size) * features_size, features_size);
+              rnd * features_size, features_size);
         } else {
           CUMEMCPY_D2D_ASYNC(
               *centroids, c * features_size, samples,
-              (rand() % samples_size) * features_size,
-              features_size);
+              rnd * features_size, features_size);
         }
       }
       break;
