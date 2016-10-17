@@ -152,6 +152,7 @@ KMCUDAResult kmeans_init_centroids(
           }
         );
       }
+      break;
     case kmcudaInitMethodRandom:
       INFO("randomly picking initial centroids...\n");
       for (uint32_t c = 0; c < clusters_size; c++) {
