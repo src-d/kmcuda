@@ -3,21 +3,19 @@
 
 #include <cuda_runtime_api.h>
 #include <memory>
+#include <vector>
 
-using unique_devptr_parent = std::unique_ptr<void, std::function<void(void*)>>;
+template <typename T>
+using unique_devptr_parent = std::unique_ptr<T, std::function<void(T*)>>;
 
-class unique_devptr : public unique_devptr_parent {
+template <typename T>
+class unique_devptr : public unique_devptr_parent<T> {
  public:
-  explicit unique_devptr(void *ptr) : unique_devptr_parent(
-      ptr, [](void *p){ cudaFree(p); }) {}
+  explicit unique_devptr(T *ptr, bool fake = false) : unique_devptr_parent<T>(
+      ptr, fake? [](T*){} : [](T *p){ cudaFree(p); }) {}
 };
 
-using unique_devptrptr_parent = std::unique_ptr<void*, std::function<void(void**)>>;
-
-class unique_devptrptr : public unique_devptrptr_parent {
- public:
-  explicit unique_devptrptr(void **ptr) : unique_devptrptr_parent(
-      ptr, [](void **p){ if (p) { cudaFree(*p); } }) {}
-};
+template <class T>
+using udevptrs = std::vector<unique_devptr<T>>;
 
 #endif //KMCUDA_WRAPPERS_H

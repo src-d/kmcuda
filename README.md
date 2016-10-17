@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda)
+
 "Yinyang" K-means using NVIDIA CUDA
 ===================================
 
@@ -13,7 +15,9 @@ kmcuda can sort 4M samples in 480 dimensions into 40000 clusters (if you
 have several days and 12 GB of GPU memory). 300K samples are grouped
 into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
-Two centroid initialization ways are supported: random and kmeans++.
+Three centroid initialization ways are supported: random, k-means++ and import.
+If you've got several GPUs, they can be utilized together and it gives the
+corresponding linear speedup either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
 results from Yinyang and Lloyd.
@@ -43,7 +47,9 @@ Building
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
-It requires cudart 7.5 / OpenMP 4.0 capable compiler.
+It requires cudart 7.5 and OpenMP 4.0 capable compiler.
+If [numpy](http://www.numpy.org/) headers are not found,
+specify the includes path with defining `NUMPY_INCLUDES`.
 
 Python users: if you are using Linux x86-64 and CUDA 7.5, then you can
 install this easily:
@@ -54,6 +60,12 @@ Otherwise, you'll have to install it from source:
 ```
 pip install git+https://github.com/src-d/kmcuda.git
 ```
+
+Testing
+-------
+`test.py` contains the unit tests based on [unittest](https://docs.python.org/3/library/unittest.html).
+They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
+[scikit-learn](http://scikit-learn.org/stable/).
 
 Python example
 --------------
@@ -68,7 +80,7 @@ arr[:2500] = numpy.random.rand(2500, 2) + [0, 2]
 arr[2500:5000] = numpy.random.rand(2500, 2) - [0, 2]
 arr[5000:7500] = numpy.random.rand(2500, 2) + [2, 0]
 arr[7500:] = numpy.random.rand(2500, 2) - [2, 0]
-centroids, assignments = kmeans_cuda(arr, 4, kmpp=True, verbosity=1, seed=3)
+centroids, assignments = kmeans_cuda(arr, 4, verbosity=1, seed=3)
 print(centroids)
 pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
 pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
@@ -79,35 +91,48 @@ You should see something like this:
 Python API
 ----------
 ```python
-def kmeans_cuda(samples, clusters, tolerance=0.0, kmpp=False,
+def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
                 yinyang_t=0.1, seed=time(), device=0, verbosity=0)
 ```
-**samples** numpy array of shape [number of samples, number of features]
+**samples** numpy array of shape \[number of samples, number of features\]
+            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
+            In the latter case, negative device index means host pointer. Optionally,
+            the tuple can be 2 items longer with preallocated device pointers for
+            centroids and assignments. dtype must be float32.
 
-**clusters** the number of clusters
+**clusters** integer, the number of clusters.
 
-**tolerance** if the relative number of reassignments drops below this value, stop
+**tolerance** float, if the relative number of reassignments drops below this value, stop.
 
-**kmpp** boolean, indicates whether to do kmeans++ initialization
+**init** string or numpy array, sets the method for centroids initialization,
+         may be "k=means++"/"kmeans++", "random" or numpy array of shape
+         \[**clusters**, number of features\]. dtype must be float32.
 
-**yinyang_t** the relative number of cluster groups, usually 0.1.
+**yinyang_t** float, the relative number of cluster groups, usually 0.1.
 
-**seed** random generator seed for reproducible results
+**seed** integer, random generator seed for reproducible results.
 
-**device** integer, CUDA device index
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
+           3 means using first and second device. Special value 0 enables all available devices.
+           Default value is 1.
 
-**verbosity** 0 means complete silence, 1 means mere progress logging, 2 means lots of output
+**verbosity** integer, 0 means complete silence, 1 means mere progress logging,
+              2 means lots of output.
+              
+ **return** tuple(centroids, assignments). If **samples** was a numpy array or
+            a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
+            (integers) allocated on the same device.
 
 C API
 -----
 ```C
-int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
-                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
-                uint32_t device, int32_t verbosity, const float *samples,
-                float *centroids, uint32_t *assignments)
+int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
+                uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+                uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
+                const float *samples, float *centroids, uint32_t *assignments)
 ```
-**kmpp** indicates whether to do kmeans++ initialization. If false,
-ordinary random centroids will be picked.
+**init** specifies the centroids initialization method: k-means++, random or import
+         (in the latter case, **centroids** is read).
 
 **tolerance** if the number of reassignments drop below this ratio, stop.
 
@@ -121,7 +146,16 @@ ordinary random centroids will be picked.
 
 **seed** random generator seed passed to srand().
 
-**device** CUDA device index - usually 0.
+**device** CUDA device OR-ed indices - usually 1. For example, 1 means using first device,
+           2 means second device, 3 means first and second device (2x speedup). Special
+           value 0 enables all available devices.
+
+**device_ptrs** configures the location of input and output. If it is negative,
+                samples and returned arrays are on host, otherwise, they belong to the
+                corresponding device. E.g., if device_ptrs is 0, **samples** is expected
+                to be a pointer to device #0's memory and the resulting **centroids** and
+                **assignments** are expected to be preallocated on device #0 as well.
+                Usually the value is -1.
 
 **verbosity** 0 - no output; 1 - progress output; >=2 - debug output.
 

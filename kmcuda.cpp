@@ -8,32 +8,16 @@
 #include <memory>
 
 #include <cuda_runtime_api.h>
+#ifdef PROFILE
+#include <cuda_profiler_api.h>
+#endif
 
-#include "wrappers.h"
 #include "private.h"
 
 
-#define CUMEMCPY(dst, src, size, flag) \
-do { if (cudaMemcpy(dst, src, size, flag) != cudaSuccess) { \
-  return kmcudaMemoryCopyError; \
-} } while(false)
-
-#define CUMEMCPY_ASYNC(dst, src, size, flag) \
-do { if (cudaMemcpyAsync(dst, src, size, flag) != cudaSuccess) { \
-  return kmcudaMemoryCopyError; \
-} } while(false)
-
-#define CUMALLOC(dest, size, name) do { \
-  DEBUG(name ": %zu\n", size); \
-  if (cudaMalloc(&dest, size) != cudaSuccess) { \
-    INFO("failed to allocate %zu bytes for " name "\n", size); \
-    return kmcudaMemoryAllocationFailure; \
-  } \
-} while(false)
-
 static int check_args(
     float tolerance, float yinyang_t, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, const float *samples, float *centroids,
+    uint32_t clusters_size, uint32_t device, const float *samples, float *centroids,
     uint32_t *assignments) {
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
     return kmcudaInvalidArguments;
@@ -43,6 +27,14 @@ static int check_args(
   }
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
+  }
+  if (device < 0) {
+    return kmcudaNoSuchDevice;
+  }
+  int devices = 0;
+  cudaGetDeviceCount(&devices);
+  if (device > (1u << devices)) {
+    return kmcudaNoSuchDevice;
   }
   if (samples == nullptr || centroids == nullptr || assignments == nullptr) {
     return kmcudaInvalidArguments;
@@ -56,14 +48,77 @@ static int check_args(
   return kmcudaSuccess;
 }
 
-static KMCUDAResult print_memory_stats() {
-  size_t free_bytes, total_bytes;
-  if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-    return kmcudaRuntimeError;
+static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verbosity) {
+  std::vector<int> devs;
+  if (device == 0) {
+    cudaGetDeviceCount(reinterpret_cast<int *>(&device));
+    if (device == 0) {
+      return std::move(devs);
+    }
+    device = (1u << device) - 1;
   }
-  printf("GPU memory: used %zu bytes (%.1f%%), free %zu bytes, total %zu bytes\n",
-         total_bytes - free_bytes, (total_bytes - free_bytes) * 100.0 / total_bytes,
-         free_bytes, total_bytes);
+  for (int dev = 0; device; dev++) {
+    if (device & 1) {
+      devs.push_back(dev);
+      if (cudaSetDevice(dev) != cudaSuccess) {
+        INFO("failed to validate device %d", dev);
+        devs.pop_back();
+      }
+    }
+    device >>= 1;
+  }
+  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+    // enable p2p for device_ptrs which is not in the devices list
+    devs.push_back(device_ptrs);
+  }
+  if (devs.size() > 1) {
+    for (int dev1 : devs) {
+      for (int dev2 : devs) {
+        if (dev1 <= dev2) {
+          continue;
+        }
+        int access = 0;
+        cudaDeviceCanAccessPeer(&access, dev1, dev2);
+        if (!access) {
+          INFO("warning: p2p %d <-> %d is impossible\n", dev1, dev2);
+        }
+      }
+    }
+    for (int dev : devs) {
+      cudaSetDevice(dev);
+      for (int odev : devs) {
+        if (dev == odev) {
+          continue;
+        }
+        auto err = cudaDeviceEnablePeerAccess(odev, 0);
+        if (err == cudaErrorPeerAccessAlreadyEnabled) {
+          INFO("p2p is already enabled on gpu #%d\n", dev);
+        } else if (err != cudaSuccess) {
+          INFO("warning: failed to enable p2p on gpu #%d: %s\n", dev,
+               cudaGetErrorString(err));
+        }
+      }
+    }
+  }
+  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+    // remove device_ptrs - it is not in the devices list
+    devs.pop_back();
+  }
+  return std::move(devs);
+}
+
+static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
+  FOR_EACH_DEV(
+    size_t free_bytes, total_bytes;
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+      return kmcudaRuntimeError;
+    }
+    printf("GPU #%d memory: used %zu bytes (%.1f%%), free %zu bytes, "
+           "total %zu bytes\n",
+           dev, total_bytes - free_bytes,
+           (total_bytes - free_bytes) * 100.0 / total_bytes,
+           free_bytes, total_bytes);
+  );
   return kmcudaSuccess;
 }
 
@@ -71,24 +126,47 @@ extern "C" {
 
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, int32_t verbosity, float *samples,
-    void *dists, float *centroids) {
-  uint32_t ssize = features_size * sizeof(float);
+    uint32_t clusters_size, uint32_t seed, const std::vector<int> &devs,
+    int device_ptrs, int32_t verbosity, const float *host_centroids,
+    const udevptrs<float> &samples, udevptrs<float> *dists,
+    udevptrs<float> *dev_sums, udevptrs<float> *centroids) {
   srand(seed);
   switch (method) {
+    case kmcudaInitMethodImport:
+      if (device_ptrs < 0) {
+        CUMEMCPY_H2D_ASYNC(*centroids, 0, host_centroids,
+                           clusters_size * features_size);
+      } else {
+        long long origin_devi = -1;
+        FOR_EACH_DEVI(
+          if (devs[devi] == device_ptrs) {
+            origin_devi = devi;
+          }
+        );
+        FOR_EACH_DEVI(
+          if (static_cast<long long>(devi) != origin_devi) {
+            CUCH(cudaMemcpyPeerAsync(
+                (*centroids)[devi].get(), devs[devi], host_centroids,
+                device_ptrs, clusters_size * features_size * sizeof(float)),
+                 kmcudaMemoryCopyError);
+          }
+        );
+      }
+      break;
     case kmcudaInitMethodRandom:
       INFO("randomly picking initial centroids...\n");
       for (uint32_t c = 0; c < clusters_size; c++) {
+        auto rnd = rand() % samples_size;
         if ((c + 1) % 1000 == 0 || c == clusters_size - 1) {
           INFO("\rcentroid #%" PRIu32, c + 1);
           fflush(stdout);
-          CUMEMCPY(centroids + c * features_size,
-                   samples + (rand() % samples_size) * features_size,
-                   ssize, cudaMemcpyDeviceToDevice);
+          CUMEMCPY_D2D(
+              *centroids, c * features_size, samples,
+              rnd * features_size, features_size);
         } else {
-          CUMEMCPY_ASYNC(centroids + c * features_size,
-                         samples + (rand() % samples_size) * features_size,
-                         ssize, cudaMemcpyDeviceToDevice);
+          CUMEMCPY_D2D_ASYNC(
+              *centroids, c * features_size, samples,
+              rnd * features_size, features_size);
         }
       }
       break;
@@ -98,12 +176,12 @@ KMCUDAResult kmeans_init_centroids(
       uint32_t first_offset;
       while (smoke != smoke) {
         first_offset = (rand() % samples_size) * features_size;
-        CUMEMCPY(&smoke, samples + first_offset, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaSetDevice(devs[0]);
+        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_offset, sizeof(float),
+                        cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
       }
-      CUMEMCPY(centroids, samples + first_offset, ssize, cudaMemcpyDeviceToDevice);
+      CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
       std::unique_ptr<float[]> host_dists(new float[samples_size]);
-      float *dev_sums = NULL;
-      unique_devptrptr dev_sums_sentinel(reinterpret_cast<void**>(&dev_sums));
       for (uint32_t i = 1; i < clusters_size; i++) {
         if (verbosity > 1 || (verbosity > 0 && (
               clusters_size < 100 || i % (clusters_size / 100) == 0))) {
@@ -112,12 +190,10 @@ KMCUDAResult kmeans_init_centroids(
         }
         float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
-            samples_size, i, samples, centroids, reinterpret_cast<float*>(dists),
-            &dist_sum, &dev_sums),
+            samples_size, features_size, i, devs, verbosity, samples, centroids,
+            dists, dev_sums, host_dists.get(), &dist_sum),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         assert(dist_sum == dist_sum);
-        CUMEMCPY(host_dists.get(), dists, samples_size * sizeof(float),
-                 cudaMemcpyDeviceToHost);
         double choice = ((rand() + .0) / RAND_MAX);
         uint32_t choice_approx = choice * samples_size;
         double choice_sum = choice * dist_sum;
@@ -145,118 +221,146 @@ KMCUDAResult kmeans_init_centroids(
           }
         }
         assert(j > 0);
-        CUMEMCPY_ASYNC(centroids + i * features_size,
-                       samples + (j - 1) * features_size,
-                       ssize, cudaMemcpyDeviceToDevice);
+        CUMEMCPY_D2D_ASYNC(*centroids, i * features_size, samples,
+                           (j - 1) * features_size, features_size);
       }
       break;
   }
-
   INFO("\rdone            \n");
   return kmcudaSuccess;
 }
 
-int kmeans_cuda(bool kmpp, float tolerance, float yinyang_t, uint32_t samples_size,
-                uint16_t features_size, uint32_t clusters_size, uint32_t seed,
-                uint32_t device, int32_t verbosity, const float *samples,
-                float *centroids, uint32_t *assignments) {
+int kmeans_cuda(
+    KMCUDAInitMethod init, float tolerance, float yinyang_t,
+    uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+    uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
+    const float *samples, float *centroids, uint32_t *assignments) {
   DEBUG("arguments: %d %.3f %.2f %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
         " %" PRIu32 " %" PRIi32 " %p %p %p\n",
-        kmpp, tolerance, yinyang_t, samples_size, features_size, clusters_size,
+        init, tolerance, yinyang_t, samples_size, features_size, clusters_size,
         seed, device, verbosity, samples, centroids, assignments);
-  auto check_result = check_args(
+  RETERR(check_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
-      samples, centroids, assignments);
-  if (check_result != kmcudaSuccess) {
-    return check_result;
-  }
-  if (cudaSetDevice(device) != cudaSuccess) {
+      device, samples, centroids, assignments));
+  INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
+  auto devs = setup_devices(device, device_ptrs, verbosity);
+  if (devs.empty()) {
     return kmcudaNoSuchDevice;
   }
-
-  void *device_samples;
-  size_t device_samples_size = samples_size;
-  device_samples_size *= features_size * sizeof(float);
-  CUMALLOC(device_samples, device_samples_size, "samples");
-  CUMEMCPY(device_samples, samples, device_samples_size, cudaMemcpyHostToDevice);
-  unique_devptr device_samples_sentinel(device_samples);
-
-  void *device_centroids;
-  size_t centroids_size = clusters_size * features_size * sizeof(float);
-  CUMALLOC(device_centroids, centroids_size, "centroids");
-  unique_devptr device_centroids_sentinel(device_centroids);
-
-  void *device_assignments;
-  size_t assignments_size = samples_size * sizeof(uint32_t);
-  CUMALLOC(device_assignments, assignments_size, "assignments");
-  unique_devptr device_assignments_sentinel(device_assignments);
-
-  void *device_assignments_prev;
-  CUMALLOC(device_assignments_prev, assignments_size, "assignments_prev");
-  unique_devptr device_assignments_prev_sentinel(device_assignments_prev);
-
-  void *device_ccounts;
-  CUMALLOC(device_ccounts, clusters_size * sizeof(uint32_t), "ccounts");
-  unique_devptr device_ccounts_sentinel(device_ccounts);
-
-  uint32_t yinyang_groups = yinyang_t * clusters_size;
-  DEBUG("yinyang groups: %" PRIu32 "\n", yinyang_groups);
-  void *device_assignments_yy = NULL, *device_bounds_yy = NULL,
-      *device_drifts_yy = NULL, *device_passed_yy = NULL,
-      *device_centroids_yy = NULL;
-  if (yinyang_groups >= 1) {
-    CUMALLOC(device_assignments_yy, clusters_size * sizeof(uint32_t),
-             "yinyang assignments");
-    size_t yyb_size = samples_size;
-    yyb_size *= (yinyang_groups + 1) * sizeof(float);
-    CUMALLOC(device_bounds_yy, yyb_size, "yinyang bounds");
-    CUMALLOC(device_drifts_yy, centroids_size + clusters_size * sizeof(float),
-             "yinyang drifts");
-    CUMALLOC(device_passed_yy, assignments_size, "yinyang passed");
-    size_t yyc_size = yinyang_groups * features_size * sizeof(float);
-    if (yyc_size + (clusters_size + yinyang_groups) * sizeof(uint32_t)
-        <= assignments_size) {
-      device_centroids_yy = device_passed_yy;
+  udevptrs<float> device_samples;
+  size_t device_samples_size = static_cast<size_t>(samples_size) * features_size;
+  long long origin_devi = -1;
+  FOR_EACH_DEVI(
+    if (devs[devi] == device_ptrs) {
+      device_samples.emplace_back(const_cast<float*>(samples), true);
+      origin_devi = devi;
     } else {
-      CUMALLOC(device_centroids_yy, yyc_size, "yinyang group centroids");
+      CUMALLOC_ONE(device_samples, device_samples_size);
+    }
+  );
+  if (device_ptrs < 0) {
+    CUMEMCPY_H2D_ASYNC(device_samples, 0, samples, device_samples_size);
+  } else {
+    FOR_EACH_DEVI(
+      if (static_cast<long long>(devi) != origin_devi) {
+        CUCH(cudaMemcpyPeerAsync(
+            device_samples[devi].get(), devs[devi], samples,
+            device_ptrs, device_samples_size * sizeof(float)),
+             kmcudaMemoryCopyError);
+      }
+    );
+  }
+  udevptrs<float> device_centroids;
+  size_t centroids_size = static_cast<size_t>(clusters_size) * features_size;
+  FOR_EACH_DEV(
+    if (dev == device_ptrs) {
+      device_centroids.emplace_back(centroids, true);
+    } else {
+      CUMALLOC_ONE(device_centroids, centroids_size);
+    }
+  );
+  udevptrs<uint32_t> device_assignments;
+  FOR_EACH_DEV(
+    if (dev == device_ptrs) {
+      device_assignments.emplace_back(assignments, true);
+    } else {
+      CUMALLOC_ONE(device_assignments, samples_size);
+    }
+  );
+  udevptrs<uint32_t> device_assignments_prev;
+  CUMALLOC(device_assignments_prev, samples_size);
+  udevptrs<uint32_t> device_ccounts;
+  CUMALLOC(device_ccounts, clusters_size);
+
+  uint32_t yy_groups_size = yinyang_t * clusters_size;
+  DEBUG("yinyang groups: %" PRIu32 "\n", yy_groups_size);
+  udevptrs<uint32_t> device_assignments_yy, device_passed_yy;
+  udevptrs<float> device_bounds_yy, device_drifts_yy, device_centroids_yy;
+  if (yy_groups_size >= 1) {
+    CUMALLOC(device_assignments_yy, clusters_size);
+    uint32_t max_length = max_distribute_length(
+        samples_size, features_size * sizeof(float), devs);
+    size_t yyb_size = static_cast<size_t>(max_length) * (yy_groups_size + 1);
+    CUMALLOC(device_bounds_yy, yyb_size);
+    CUMALLOC(device_drifts_yy, centroids_size + clusters_size);
+    max_length = std::max(max_length, clusters_size + yy_groups_size);
+    CUMALLOC(device_passed_yy, max_length);
+    size_t yyc_size = yy_groups_size * features_size;
+    if (yyc_size + (clusters_size + yy_groups_size) <= max_length) {
+      for (auto &p : device_passed_yy) {
+        device_centroids_yy.emplace_back(
+            reinterpret_cast<float*>(p.get()), true);
+      }
+    } else {
+      CUMALLOC(device_centroids_yy, yyc_size);
     }
   }
-  unique_devptr device_centroids_yinyang_sentinel(
-      (device_centroids_yy != device_passed_yy)? device_centroids_yy : NULL);
-  unique_devptr device_assignments_yinyang_sentinel(device_assignments_yy);
-  unique_devptr device_bounds_yinyang_sentinel(device_bounds_yy);
-  unique_devptr device_drifts_yinyang_sentinel(device_drifts_yy);
-  unique_devptr device_passed_yinyang_sentinel(device_passed_yy);
 
   if (verbosity > 1) {
-    RETERR(print_memory_stats());
+    RETERR(print_memory_stats(devs));
   }
   RETERR(kmeans_cuda_setup(samples_size, features_size, clusters_size,
-                           yinyang_groups, device, verbosity),
-         DEBUG("kmeans_cuda_setup failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
+                           yy_groups_size, devs, verbosity),
+         DEBUG("kmeans_cuda_setup failed: %s\n", CUERRSTR()));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStart());
+  #endif
   RETERR(kmeans_init_centroids(
-      static_cast<KMCUDAInitMethod>(kmpp), samples_size, features_size,
-      clusters_size, seed, verbosity, reinterpret_cast<float*>(device_samples),
-      device_assignments, reinterpret_cast<float*>(device_centroids)),
-         DEBUG("kmeans_init_centroids failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
+      init, samples_size, features_size, clusters_size, seed, devs, device_ptrs,
+      verbosity, centroids, device_samples,
+      reinterpret_cast<udevptrs<float>*>(&device_assignments),
+      reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
+      &device_centroids),
+         DEBUG("kmeans_init_centroids failed: %s\n", CUERRSTR()));
   RETERR(kmeans_cuda_yy(
-      tolerance, yinyang_groups, samples_size, clusters_size, features_size, verbosity,
-      reinterpret_cast<float*>(device_samples),
-      reinterpret_cast<float*>(device_centroids),
-      reinterpret_cast<uint32_t*>(device_ccounts),
-      reinterpret_cast<uint32_t*>(device_assignments_prev),
-      reinterpret_cast<uint32_t*>(device_assignments),
-      reinterpret_cast<uint32_t*>(device_assignments_yy),
-      reinterpret_cast<float*>(device_centroids_yy),
-      reinterpret_cast<float*>(device_bounds_yy),
-      reinterpret_cast<float*>(device_drifts_yy),
-      reinterpret_cast<uint32_t*>(device_passed_yy)),
-         DEBUG("kmeans_cuda_internal failed: %s\n",
-               cudaGetErrorString(cudaGetLastError())));
-  CUMEMCPY(centroids, device_centroids, centroids_size, cudaMemcpyDeviceToHost);
-  CUMEMCPY(assignments, device_assignments, assignments_size, cudaMemcpyDeviceToHost);
+      tolerance, yy_groups_size, samples_size, clusters_size, features_size,
+      devs, verbosity, device_samples, &device_centroids, &device_ccounts,
+      &device_assignments_prev, &device_assignments, &device_assignments_yy,
+      &device_centroids_yy, &device_bounds_yy, &device_drifts_yy, &device_passed_yy),
+         DEBUG("kmeans_cuda_internal failed: %s\n", CUERRSTR()));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStop());
+  #endif
+  if (origin_devi < 0) {
+    if (device_ptrs < 0) {
+      CUCH(cudaMemcpy(centroids, device_centroids[devs.back()].get(),
+                      centroids_size * sizeof(float), cudaMemcpyDeviceToHost),
+           kmcudaMemoryCopyError);
+      CUCH(cudaMemcpy(assignments, device_assignments[devs.back()].get(),
+                      samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
+           kmcudaMemoryCopyError);
+    } else {
+      CUCH(cudaMemcpyPeer(centroids, device_ptrs,
+                          device_centroids[devs.size() - 1].get(),
+                          devs.back(), centroids_size * sizeof(float)),
+           kmcudaMemoryCopyError);
+      CUCH(cudaMemcpyPeer(assignments, device_ptrs,
+                          device_assignments[devs.size() - 1].get(),
+                          devs.back(), samples_size * sizeof(uint32_t)),
+           kmcudaMemoryCopyError);
+      SYNC_ALL_DEVS;
+    }
+  }
   DEBUG("return kmcudaSuccess\n");
   return kmcudaSuccess;
 }
