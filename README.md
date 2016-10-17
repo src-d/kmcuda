@@ -23,7 +23,7 @@ The code has been thoroughly tested to yield bit-to-bit identical
 results from Yinyang and Lloyd.
 
 Technically, this project is a library which exports the single function
-defined in `wrappers.h`, `kmeans_cuda`. It has a built-in Python3 native
+defined in `kmcuda.h`, `kmeans_cuda`. It has a built-in Python3 native
 extension support, so you can `from libKMCUDA import kmeans_cuda`.
 
 [Read the article](http://blog.sourced.tech/post/towards_kmeans_on_gpu/).
