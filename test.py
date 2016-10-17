@@ -24,7 +24,7 @@ class CUDA_cuda4py(object):
         self.devices = self.cuda4py.Devices().devices
 
     def allocate(self, size, device):
-        obj = self.devices[device].create_context().mem_alloc(size * 4)
+        obj = self.devices[device].create_context().mem_alloc(size)
         self.objects[obj.handle] = obj
         return obj.handle
 
@@ -50,12 +50,67 @@ class CUDA_cuda4py(object):
         self.objects[ptr] = self.cuda4py._py.MemPtr(ctx, ptr)
 
 
+class CUDA_pycuda(object):
+    @staticmethod
+    def exists():
+        try:
+            import pycuda
+            return True
+        except ImportError:
+            return False
+
+    def __init__(self):
+        import pycuda.driver as cuda
+        self.cuda = cuda
+        cuda.init()
+        self.ctxs = [cuda.Device(i).make_context()
+                     for i in range(cuda.Device.count())]
+        for ctx in self.ctxs:
+            ctx.pop()
+        self.arrays = {}
+
+    def allocate(self, size, device):
+        ctx = self.ctxs[device]
+        ctx.push()
+        arr = self.cuda.mem_alloc(size)
+        self.arrays[int(arr)] = ctx, arr
+        ctx.pop()
+        return int(arr)
+
+    def free(self, ptr):
+        ctx, _ = self.arrays[ptr]
+        ctx.push()
+        del self.arrays[ptr]
+        ctx.pop()
+
+    def copy_to_host(self, ptr, size, dtype):
+        ctx, _ = self.arrays[ptr]
+        ctx.push()
+        arr = numpy.zeros(size, dtype=dtype)
+        try:
+            self.cuda.memcpy_dtoh(arr, ptr)
+        finally:
+            ctx.pop()
+        return arr
+
+    def copy_to_device(self, ptr, arr):
+        ctx, _ = self.arrays[ptr]
+        ctx.push()
+        try:
+            self.cuda.memcpy_htod(ptr, arr)
+        finally:
+            ctx.pop()
+
+    def wrap(self, ptr, device):
+        self.arrays[ptr] = self.ctxs[device], None
+
+
 class CUDA(object):
     def __init__(self):
         if CUDA_cuda4py.exists():
             self._api = CUDA_cuda4py()
         else:
-            self._api = None
+            self._api = CUDA_pycuda()
 
     @property
     def api(self):
@@ -210,7 +265,7 @@ class KMCUDATests(unittest.TestCase):
 
     def test_random_lloyd_same_device_ptr(self):
         cuda = CUDA()
-        devptr = cuda.api.allocate(self.samples.size, 0)
+        devptr = cuda.api.allocate(self.samples.size * 4, 0)
         cuda.api.copy_to_device(devptr, self.samples)
         with self.stdout:
             cdevptr, adevptr = kmeans_cuda(
@@ -234,7 +289,7 @@ class KMCUDATests(unittest.TestCase):
 
     def test_random_lloyd_same_device_ptr_all_devs(self):
         cuda = CUDA()
-        devptr = cuda.api.allocate(self.samples.size, 0)
+        devptr = cuda.api.allocate(self.samples.size * 4, 0)
         cuda.api.copy_to_device(devptr, self.samples)
         with self.stdout:
             cdevptr, adevptr = kmeans_cuda(
@@ -258,7 +313,7 @@ class KMCUDATests(unittest.TestCase):
 
     def test_random_lloyd_different_device_ptr(self):
         cuda = CUDA()
-        devptr = cuda.api.allocate(self.samples.size, 0)
+        devptr = cuda.api.allocate(self.samples.size * 4, 0)
         cuda.api.copy_to_device(devptr, self.samples)
         with self.stdout:
             cdevptr, adevptr = kmeans_cuda(
