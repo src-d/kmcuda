@@ -1,8 +1,9 @@
 from multiprocessing import cpu_count
 import os
-from shutil import copyfile
 from setuptools import setup
 from setuptools.command.build_py import build_py
+from setuptools.dist import Distribution
+from shutil import copyfile
 from subprocess import check_call
 from sys import platform
 
@@ -30,6 +31,14 @@ class CMakeBuild(build_py):
         self._shared_lib = [dest]
 
 
+class BinaryDistribution(Distribution):
+    """Distribution which always forces a binary package with platform name"""
+    def has_ext_modules(self):
+        return True
+
+    def is_pure(self):
+        return False
+
 setup(
     name="libKMCUDA",
     description="Accelerated K-means on GPU",
@@ -41,13 +50,18 @@ setup(
     download_url="https://github.com/src-d/kmcuda",
     py_modules=["libKMCUDA"],
     install_requires=["numpy"],
+    distclass=BinaryDistribution,
     cmdclass={'build_py': CMakeBuild},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
-        "Operating System :: POSIX",
+        "Operating System :: POSIX :: Linux",
+        "Topic :: Scientific/Engineering :: Information Analysis",
         "Programming Language :: Python :: 3.4",
         "Programming Language :: Python :: 3.5"
     ]
 )
+
+# auditwheel repair -w dist dist/*
+# twine upload dist/*manylinux*
