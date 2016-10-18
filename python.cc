@@ -82,17 +82,18 @@ static void set_cuda_memcpy_error() {
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0;
+  int fp16x2 = 0;
   float tolerance = .01, yinyang_t = .1;
   PyObject *samples_obj, *init_obj = Py_None, *metric_obj = Py_None;
   static const char *kwlist[] = {
       "samples", "clusters", "tolerance", "init", "yinyang_t", "metric", "seed",
-      "device", "verbosity", NULL};
+      "device", "fp16x2", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fOfOIIi", const_cast<char**>(kwlist), &samples_obj,
+      args, kwargs, "OI|fOfOIIpi", const_cast<char**>(kwlist), &samples_obj,
       &clusters_size, &tolerance, &init_obj, &yinyang_t, &metric_obj, &seed,
-      &device, &verbosity)) {
+      &device, &fp16x2, &verbosity)) {
     return NULL;
   }
 
@@ -284,7 +285,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   result = kmeans_cuda(
       init, tolerance, yinyang_t, metric, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      device_ptrs, verbosity, samples, centroids, assignments);
+      device_ptrs, fp16x2, verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
 
   switch (result) {

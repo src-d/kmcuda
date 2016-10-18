@@ -45,8 +45,8 @@ If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
 (all GPU allocation happens at startup).
 
-Data type is 32-bit float. Number of samples is limited by 1^32,
-clusters by 1^32 and features by 1^16. Besides, the product of
+Data type is either 32 or 16-bit float. Number of samples is limited by 1^32,
+clusters by 1^32 and features by 1^16 (1^17 for fp16). Besides, the product of
 clusters number and features number may not exceed 1^32.
 
 Building
@@ -54,15 +54,15 @@ Building
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
-It requires cudart 7.5 and OpenMP 4.0 capable compiler.
+It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler.
 If [numpy](http://www.numpy.org/) headers are not found,
 specify the includes path with defining `NUMPY_INCLUDES`.
 If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
 If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
 (change the path to the actual one).
 
-Python users: if you are using Linux x86-64 and CUDA 7.5, then you can
-install this easily:
+Python users: if you are using Linux x86-64 and CUDA 8.0, then you can
+install libKMCUDA easily:
 ```
 pip install libKMCUDA
 ```
