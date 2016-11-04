@@ -118,6 +118,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t *assignments = nullptr;
   uint32_t samples_size = 0, features_size = 0;
   int device_ptrs = -1;
+  pyobj samples_array;
   if (PyTuple_Check(samples_obj)) {
     auto size = PyTuple_GET_SIZE(samples_obj);
     if (size != 3 && size != 5) {
@@ -158,8 +159,8 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
           PyLong_AsUnsignedLongLong(member5)));
     }
   } else {
-    pyobj samples_array(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
-    if (samples_array == NULL) {
+    samples_array.reset(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+    if (!samples_array) {
       PyErr_SetString(PyExc_TypeError, "\"samples\" must be a 2D numpy array");
       return NULL;
     }

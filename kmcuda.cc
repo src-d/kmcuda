@@ -67,7 +67,8 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
     }
     device >>= 1;
   }
-  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+  bool p2p_dp = (device_ptrs >= 0 && !(device & (1 << device_ptrs)));
+  if (p2p_dp) {
     // enable p2p for device_ptrs which is not in the devices list
     devs.push_back(device_ptrs);
   }
@@ -100,7 +101,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
       }
     }
   }
-  if (device_ptrs >= 0 && !(device & (1 << device_ptrs))) {
+  if (p2p_dp) {
     // remove device_ptrs - it is not in the devices list
     devs.pop_back();
   }

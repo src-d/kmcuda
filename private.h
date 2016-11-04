@@ -93,7 +93,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
       &__ptr, \
       (size) * sizeof(std::remove_reference<decltype(dest)>::type::value_type \
           ::element_type)), \
-       kmcudaMemoryCopyError, \
+       kmcudaMemoryAllocationFailure, \
        INFO("failed to allocate %zu bytes for " name "\n", \
             static_cast<size_t>(size))); \
   (dest).emplace_back(reinterpret_cast<std::remove_reference<decltype(dest)> \
@@ -209,4 +209,4 @@ KMCUDAResult kmeans_init_centroids(
     udevptrs<float> *dev_sums, udevptrs<float> *centroids);
 }
 
-#endif //KMCUDA_PRIVATE_H
+#endif  // KMCUDA_PRIVATE_H
