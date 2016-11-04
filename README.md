@@ -50,6 +50,9 @@ cmake -DCMAKE_BUILD_TYPE=Release . && make
 It requires cudart 7.5 and OpenMP 4.0 capable compiler.
 If [numpy](http://www.numpy.org/) headers are not found,
 specify the includes path with defining `NUMPY_INCLUDES`.
+If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
+If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
+(change the path to the actual one).
 
 Python users: if you are using Linux x86-64 and CUDA 7.5, then you can
 install this easily:
@@ -69,7 +72,7 @@ They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](htt
 
 Python example
 --------------
-```
+```python
 import numpy
 from matplotlib import pyplot
 from libKMCUDA import kmeans_cuda
