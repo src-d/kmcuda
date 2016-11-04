@@ -22,7 +22,11 @@ class CMakeBuild(build_py):
         return outputs
 
     def _build(self, builddir=None):
-        check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release", "."))
+        check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
+                    "-DCUDA_TOOLKIT_ROOT_DIR=%s" % os.getenv(
+                        "CUDA_TOOLKIT_ROOT_DIR",
+                        "must_export_CUDA_TOOLKIT_ROOT_DIR"),
+                    "."))
         check_call(("make", "-j%d" % cpu_count()))
         self.mkpath(self.build_lib)
         shlib = "libKMCUDA." + self.SHLIBEXT
@@ -63,5 +67,6 @@ setup(
     ]
 )
 
+# python3 setup.py bdist_wheel
 # auditwheel repair -w dist dist/*
 # twine upload dist/*manylinux*
