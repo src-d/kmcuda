@@ -470,7 +470,7 @@ __global__ void kmeans_yy_local_filter(
     const uint32_t *__restrict__ passed, const float *__restrict__ centroids,
     const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
     uint32_t *__restrict__ assignments, float *__restrict__ bounds) {
-  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  volatile uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= d_passed_number) {
     return;
   }
