@@ -132,6 +132,15 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
        kmcudaMemoryCopyError); \
 } while(false)
 
+#define METRIC_SWITCH(f, ...) do { switch (metric) { \
+  case kmcudaDistanceMetricL2: \
+    f<kmcudaDistanceMetricL2>__VA_ARGS__; \
+    break; \
+  case kmcudaDistanceMetricCosine: \
+    f<kmcudaDistanceMetricCosine>__VA_ARGS__; \
+    break; \
+} } while(false)
+
 inline std::vector<std::tuple<uint32_t, uint32_t>> distribute(
     uint32_t amount, uint32_t size_each, const std::vector<int> &devs) {
   if (devs.size() == 0) {
@@ -184,9 +193,10 @@ extern "C" {
 
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,
-    const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
-    udevptrs<float> *centroids, udevptrs<float> *dists,
-    udevptrs<float> *dev_sums, float *host_dists, float *dists_sum);
+    KMCUDADistanceMetric metric, const std::vector<int> &devs, int verbosity,
+    const udevptrs<float> &samples, udevptrs<float> *centroids,
+    udevptrs<float> *dists, udevptrs<float> *dev_sums,
+    float *host_dists, float *dists_sum);
 
 KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
                                uint32_t clusters_size, uint32_t yy_groups_size,
@@ -194,8 +204,9 @@ KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
 
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yy_groups_size, uint32_t samples_size,
-    uint32_t clusters_size, uint16_t features_size, const std::vector<int> &devs,
-    int32_t verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
+    uint32_t clusters_size, uint16_t features_size, KMCUDADistanceMetric metric,
+    const std::vector<int> &devs, int32_t verbosity,
+    const udevptrs<float> &samples, udevptrs<float> *centroids,
     udevptrs<uint32_t> *ccounts, udevptrs<uint32_t> *assignments_prev,
     udevptrs<uint32_t> *assignments, udevptrs<uint32_t> *assignments_yy,
     udevptrs<float> *centroids_yy, udevptrs<float> *bounds_yy,
@@ -203,10 +214,10 @@ KMCUDAResult kmeans_cuda_yy(
 
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, const std::vector<int> &devs,
-    int device_ptrs, int32_t verbosity, const float *host_centroids,
-    const udevptrs<float> &samples, udevptrs<float> *dists,
-    udevptrs<float> *dev_sums, udevptrs<float> *centroids);
+    uint32_t clusters_size, KMCUDADistanceMetric metric, uint32_t seed,
+    const std::vector<int> &devs, int device_ptrs, int32_t verbosity,
+    const float *host_centroids,  const udevptrs<float> &samples,
+    udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids);
 }
 
 #endif  // KMCUDA_PRIVATE_H

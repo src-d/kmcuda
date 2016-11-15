@@ -59,6 +59,14 @@ static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"random", kmcudaInitMethodRandom}
 };
 
+static const std::unordered_map<std::string, KMCUDADistanceMetric > metrics {
+    {"L2", kmcudaDistanceMetricL2},
+    {"l2", kmcudaDistanceMetricL2},
+    {"cos", kmcudaDistanceMetricCosine},
+    {"cosine", kmcudaDistanceMetricCosine},
+    {"angular", kmcudaDistanceMetricCosine}
+};
+
 static void set_cuda_malloc_error() {
   PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory on GPU");
 }
@@ -75,21 +83,23 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0;
   float tolerance = .01, yinyang_t = .1;
-  PyObject *samples_obj, *init_obj;
+  PyObject *samples_obj, *init_obj = Py_None, *metric_obj = Py_None;
   static const char *kwlist[] = {
-      "samples", "clusters", "tolerance", "init", "yinyang_t", "seed", "device",
-      "verbosity", NULL};
+      "samples", "clusters", "tolerance", "init", "yinyang_t", "metric", "seed",
+      "device", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fOfIIi", const_cast<char**>(kwlist), &samples_obj,
-      &clusters_size, &tolerance, &init_obj, &yinyang_t, &seed, &device,
-      &verbosity)) {
+      args, kwargs, "OI|fOfOIIi", const_cast<char**>(kwlist), &samples_obj,
+      &clusters_size, &tolerance, &init_obj, &yinyang_t, &metric_obj, &seed,
+      &device, &verbosity)) {
     return NULL;
   }
 
   KMCUDAInitMethod init;
-  if (PyUnicode_Check(init_obj)) {
+  if (init_obj == Py_None) {
+    init = kmcudaInitMethodPlusPlus;
+  } else if (PyUnicode_Check(init_obj)) {
     pyobj bytes(PyUnicode_AsASCIIString(init_obj));
     auto iminit = init_methods.find(PyBytes_AsString(bytes.get()));
     if (iminit == init_methods.end()) {
@@ -102,6 +112,24 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     init = iminit->second;
   } else {
     init = kmcudaInitMethodImport;
+  }
+  KMCUDADistanceMetric metric;
+  if (metric_obj == Py_None) {
+    metric = kmcudaDistanceMetricL2;
+  } else if (!PyUnicode_Check(metric_obj)) {
+    PyErr_SetString(
+        PyExc_TypeError, "\"metric\" must be either None or string.");
+    return NULL;
+  } else {
+    pyobj bytes(PyUnicode_AsASCIIString(metric_obj));
+    auto immetric = metrics.find(PyBytes_AsString(bytes.get()));
+    if (immetric == metrics.end()) {
+      PyErr_SetString(
+          PyExc_ValueError,
+          "Unknown metric. Supported values are \"L2\" and \"cos\".");
+      return NULL;
+    }
+    metric = immetric->second;
   }
   if (device < 0) {
     PyErr_SetString(PyExc_ValueError, "\"device\" must be a binary device "
@@ -254,7 +282,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
-      init, tolerance, yinyang_t, samples_size,
+      init, tolerance, yinyang_t, metric, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
       device_ptrs, verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
