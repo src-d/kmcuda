@@ -369,6 +369,8 @@ KMCUDAResult kmeans_cuda(
 KMCUDAResult normalize_cuda(
     const float *samples, uint16_t features_size, uint32_t samples_size,
     uint32_t device, int device_ptrs, int32_t verbosity, float *output) {
+
+  DEBUG("return kmcudaSuccess\n");
   return kmcudaSuccess;
 }
 

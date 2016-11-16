@@ -116,7 +116,7 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 **metric** str, the name of the distance metric to use. The default is Euclidean (L2),
                 can be changed to "cos" to behave as Spherical K-means with the
                 angular distance. Please note that samples *must* be normalized in that
-                case (e.g., using normalize_cuda()).
+                case.
 
 **seed** integer, random generator seed for reproducible results.
 
@@ -149,8 +149,7 @@ KMCUDAResult kmeans_cuda(
 
 **metric** The distance metric to use. The default is Euclidean (L2), can be
            changed to cosine to behave as Spherical K-means with the angular
-           distance. Please note that samples *must* be normalized in that case
-           (e.g., using normalize_cuda()).
+           distance. Please note that samples *must* be normalized in that case.
 
 **samples_size** number of samples.
 
