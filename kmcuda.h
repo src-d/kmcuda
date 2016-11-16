@@ -29,8 +29,10 @@ extern "C" {
 /// @param init centroids initialization method.
 /// @param tolerance if the number of reassignments drop below this ratio, stop.
 /// @param yinyang_t the relative number of cluster groups, usually 0.1.
-/// @param metric the distance metric to use. If set to cosine, the samples
-///               must be normalized, e.g., using normalize_cuda().
+/// @param metric the distance metric to use. The default is Euclidean (L2), can be
+///               changed to cosine to behave as Spherical K-means with the angular
+///               distance. Please note that samples *must* be normalized in that
+///               case (e.g., using normalize_cuda()).
 /// @param samples_size number of samples.
 /// @param features_size number of features (vector dimensionality).
 /// @param clusters_size number of clusters.
