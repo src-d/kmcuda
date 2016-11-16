@@ -37,7 +37,9 @@ In such cases, their features are set to NaN.
 
 Angular (cosine) distance metric effectively results in Spherical K-Means behavior.
 The samples **must** be normalized to L2 norm equal to 1 before clustering,
-it is not done automatically.
+it is not done automatically. The actual formula is:
+
+![D(A, B)=\arccos\left(\frac{A\cdot B}{|A||B|}\right)](http://latex2png.com/output//latex_065769cfb5ca039cc4382e1893e94a49.png)
 
 If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
@@ -75,8 +77,11 @@ Testing
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
 
-Python example
---------------
+Python examples
+---------------
+
+#### L2 (Euclidean) distance
+
 ```python
 import numpy
 from matplotlib import pyplot
@@ -94,7 +99,27 @@ pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
 pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
 ```
 You should see something like this:
-![Clustered dots](cls.png)
+![Clustered dots](cls_euclidean.png)
+
+#### Angular (cosine) distance
+
+```python
+import numpy
+from matplotlib import pyplot
+from libKMCUDA import kmeans_cuda
+
+numpy.random.seed(0)
+arr = numpy.empty((10000, 2), dtype=numpy.float32)
+angs = numpy.random.rand(10000) * 2 * numpy.pi
+for i in range(10000):
+    arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
+centroids, assignments = kmeans_cuda(arr, 4, metric="cos", verbosity=1, seed=3)
+print(centroids)
+pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
+pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
+```
+You should see something like this:
+![Clustered dots](cls_angular.png)
 
 Python API
 ----------
