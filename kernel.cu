@@ -28,6 +28,81 @@ __constant__ uint32_t d_clusters_size;
 __constant__ uint32_t d_yy_groups_size;
 __constant__ int d_shmem_size;
 
+template <KMCUDADistanceMetric M>
+__device__ __forceinline__ float distance(float sqr1, float sqr2, float prod);
+
+template <KMCUDADistanceMetric M>
+__device__ __forceinline__ float distance(
+    const float *__restrict__ v1, const float *__restrict__ v2);
+
+template <>
+__device__ __forceinline__ float distance<kmcudaDistanceMetricL2>(
+    float sqr1, float sqr2, float prod) {
+  return sqr1 + sqr2 - 2 * prod;
+}
+
+template <>
+__device__ __forceinline__ float distance<kmcudaDistanceMetricL2>(
+    const float *__restrict__ v1, const float *__restrict__ v2) {
+  float dist = 0;
+  #pragma unroll 4
+  for (uint16_t f = 0; f < d_features_size; f++) {
+    float d = v1[f] - v2[f];
+    dist += d * d;
+  }
+  return sqrt(dist);
+}
+
+template <>
+__device__ __forceinline__ float distance<kmcudaDistanceMetricCosine>(
+    float sqr1, float sqr2, float prod) {
+  return acos(prod / sqrt(sqr1 * sqr2));
+}
+
+template <>
+__device__ __forceinline__ float distance<kmcudaDistanceMetricCosine>(
+    const float *__restrict__ v1, const float *__restrict__ v2) {
+  volatile float n1 = 0, n2 = 0, prod = 0;
+  #pragma unroll 4
+  for (uint16_t f = 0; f < d_features_size; f++) {
+    float f1 = v1[f];
+    float f2 = v2[f];
+    n1 += f1 * f1;
+    n2 += f2 * f2;
+    prod += f1 * f2;
+  }
+  return distance<kmcudaDistanceMetricCosine>(n1, n2, prod);
+}
+
+template <KMCUDADistanceMetric M>
+__device__ __forceinline__ void normalize(uint32_t count, float *vec);
+
+template <>
+__device__ __forceinline__ void normalize<kmcudaDistanceMetricL2>(
+    uint32_t count, float *vec) {
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    vec[f] /= count;
+  }
+}
+
+template <>
+__device__ __forceinline__ void normalize<kmcudaDistanceMetricCosine>(
+    uint32_t count __attribute__((unused)), float *vec) {
+  float norm = 0;
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    float v = vec[f];
+    norm += v * v;
+  }
+  norm = sqrt(norm);
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    vec[f] /= norm;
+  }
+}
+
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_plus_plus(
     const uint32_t border, const uint32_t cc, const float *__restrict__ samples,
     const float *__restrict__ centroids, float *__restrict__ dists,
@@ -40,13 +115,7 @@ __global__ void kmeans_plus_plus(
   extern __shared__ float local_dists[];
   float dist = 0;
   if (samples[0] == samples[0]) {
-    uint32_t coffset = (cc - 1) * d_features_size;
-    #pragma unroll 4
-    for (uint16_t f = 0; f < d_features_size; f++) {
-      float d = samples[f] - centroids[coffset + f];
-      dist += d * d;
-    }
-    dist = sqrt(dist);
+    dist = distance<M>(samples, centroids + (cc - 1) * d_features_size);
   }
   float prev_dist = dists[sample];
   if (dist < prev_dist || cc == 1) {
@@ -77,6 +146,7 @@ __global__ void kmeans_plus_plus(
   }
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_assign_lloyd_smallc(
     const uint32_t border, const float *__restrict__ samples,
     const float *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
@@ -130,13 +200,13 @@ __global__ void kmeans_assign_lloyd_smallc(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      float pair = 0;
+      float product = 0;
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        pair += shared_samples[soffset + f] * shared_centroids[coffset + f];
+        product += shared_samples[soffset + f] * shared_centroids[coffset + f];
       }
-      float dist = ssqr + csqrs[c - gc] - 2 * pair;
+      float dist = distance<M>(ssqr, csqrs[c - gc], product);
       if (dist < min_dist) {
         min_dist = dist;
         nearest = c;
@@ -160,6 +230,7 @@ __global__ void kmeans_assign_lloyd_smallc(
   }
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_assign_lloyd(
     const uint32_t border, const float *__restrict__ samples,
     const float *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
@@ -209,13 +280,13 @@ __global__ void kmeans_assign_lloyd(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      float pair = 0;
+      float product = 0;
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        pair += samples[f] * shared_centroids[coffset + f];
+        product += samples[f] * shared_centroids[coffset + f];
       }
-      float dist = ssqr + csqrs[c - gc] - 2 * pair;
+      float dist = distance<M>(ssqr, csqrs[c - gc], product);
       if (dist < min_dist) {
         min_dist = dist;
         nearest = c;
@@ -239,6 +310,7 @@ __global__ void kmeans_assign_lloyd(
   }
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_adjust(
     const uint32_t border, const uint32_t coffset,
     const float *__restrict__ samples,
@@ -288,19 +360,17 @@ __global__ void kmeans_adjust(
       }
     }
   }
-  // my_count can be 0 => we get NaN and never use this cluster again
+  // my_count can be 0 => we get NaN with L2 and never use this cluster again
   // this is a feature, not a bug
-  #pragma unroll 4
-  for (int f = 0; f < d_features_size; f++) {
-    centroids[f] /= my_count;
-  }
+  normalize<M>(my_count, centroids);
   ccounts[c] = my_count;
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_yy_init(
     const uint32_t border, const float *__restrict__ samples,
     const float *__restrict__ centroids, const uint32_t *__restrict__ assignments,
-    const uint32_t *__restrict__ groups, float *__restrict__ bounds) {
+    const uint32_t *__restrict__ groups, float *__restrict__ volatile bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= border) {
     return;
@@ -312,7 +382,8 @@ __global__ void kmeans_yy_init(
   bounds++;
   samples += static_cast<uint64_t>(sample) * d_features_size;
   uint32_t nearest = assignments[sample];
-  extern __shared__ float shared_centroids[];
+  extern __shared__ float shared_memory[];
+  float *volatile shared_centroids = shared_memory;
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
@@ -334,19 +405,13 @@ __global__ void kmeans_yy_init(
     __syncthreads();
 
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      float dist = 0;
-      coffset = (c - gc) * d_features_size;
       uint32_t group = groups[c];
       if (group >= d_yy_groups_size) {
         // this may happen if the centroid is insane (NaN)
         continue;
       }
-      #pragma unroll 4
-      for (int f = 0; f < d_features_size; f++) {
-        float d = samples[f] - shared_centroids[coffset + f];
-        dist += d * d;
-      }
-      dist = sqrt(dist);
+      float dist = distance<M>(
+          samples, shared_centroids + (c - gc) * d_features_size);
       if (c != nearest) {
         if (dist < bounds[group]) {
           bounds[group] = dist;
@@ -358,6 +423,7 @@ __global__ void kmeans_yy_init(
   }
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_yy_calc_drifts(
     const uint32_t border, const uint32_t offset,
     const float *__restrict__ centroids, float *__restrict__ drifts) {
@@ -367,13 +433,8 @@ __global__ void kmeans_yy_calc_drifts(
   }
   c += offset;
   uint32_t coffset = c * d_features_size;
-  float sum = 0;
-  #pragma unroll 4
-  for (uint32_t f = coffset; f < coffset + d_features_size; f++) {
-    float d = centroids[f] - drifts[f];
-    sum += d * d;
-  }
-  drifts[d_clusters_size * d_features_size + c] = sqrt(sum);
+  drifts[d_clusters_size * d_features_size + c] = distance<M>(
+      centroids + coffset, drifts + coffset);
 }
 
 __global__ void kmeans_yy_find_group_max_drifts(
@@ -415,6 +476,7 @@ __global__ void kmeans_yy_find_group_max_drifts(
   drifts[group] = my_max;
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_yy_global_filter(
     const uint32_t border, const float *__restrict__ samples,
     const float *__restrict__ centroids, const uint32_t *__restrict__ groups,
@@ -449,13 +511,7 @@ __global__ void kmeans_yy_global_filter(
   }
   upper_bound = 0;
   samples += static_cast<uint64_t>(sample) * d_features_size;
-  uint32_t coffset = cluster * d_features_size;
-  #pragma unroll 4
-  for (uint32_t f = 0; f < d_features_size; f++) {
-    float d = samples[f] - centroids[coffset + f];
-    upper_bound += d * d;
-  }
-  upper_bound = sqrt(upper_bound);
+  upper_bound = distance<M>(samples, centroids + cluster * d_features_size);
   bounds[0] = upper_bound;
   // group filter try #2
   if (min_lower_bound >= upper_bound) {
@@ -465,12 +521,13 @@ __global__ void kmeans_yy_global_filter(
   passed[atomicAdd(&d_passed_number, 1)] = sample;
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_yy_local_filter(
     const float *__restrict__ samples,
     const uint32_t *__restrict__ passed, const float *__restrict__ centroids,
     const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
     uint32_t *__restrict__ assignments, float *__restrict__ bounds) {
-  volatile uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= d_passed_number) {
     return;
   }
@@ -483,7 +540,8 @@ __global__ void kmeans_yy_local_filter(
   uint32_t doffset = d_clusters_size * d_features_size;
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
   uint32_t nearest = cluster;
-  extern __shared__ float shared_centroids[];
+  extern __shared__ float shared_memory[];
+  float *volatile shared_centroids = shared_memory;
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, d_passed_number - blockIdx.x * blockDim.x) + 1;
@@ -524,14 +582,8 @@ __global__ void kmeans_yy_local_filter(
       if (second_min_dist < lower_bound) {
         continue;
       }
-      float dist = 0;
-      uint32_t coffset = (c - gc) * d_features_size;
-      #pragma unroll 4
-      for (int f = 0; f < d_features_size; f++) {
-        float d = samples[f] - shared_centroids[coffset + f];
-        dist += d * d;
-      }
-      dist = sqrt(dist);
+      float dist = distance<M>(
+          samples, shared_centroids + (c - gc) * d_features_size);
       if (dist < min_dist) {
         second_min_dist = min_dist;
         min_dist = dist;
@@ -650,8 +702,8 @@ KMCUDAResult kmeans_cuda_setup(
 
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t h_samples_size, uint32_t h_features_size, uint32_t cc,
-    const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
-    udevptrs<float> *centroids, udevptrs<float> *dists,
+    KMCUDADistanceMetric metric, const std::vector<int> &devs, int verbosity,
+    const udevptrs<float> &samples, udevptrs<float> *centroids, udevptrs<float> *dists,
     udevptrs<float> *dev_sums, float *host_dists, float *dist_sum) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   uint32_t max_len = 0;
@@ -670,9 +722,9 @@ KMCUDAResult kmeans_cuda_plus_plus(
     std::tie(offset, length) = plan[devi];
     dim3 block(BS_KMPP, 1, 1);
     dim3 grid(length / block.x + 1, 1, 1);
-    kmeans_plus_plus<<<grid, block, block.x * sizeof(float)>>>(
+    METRIC_SWITCH(kmeans_plus_plus, <<<grid, block, block.x * sizeof(float)>>>(
         length, cc, samples[devi].get() + offset * h_features_size,
-        (*centroids)[devi].get(), (*dists)[devi].get(), (*dev_sums)[devi].get());
+        (*centroids)[devi].get(), (*dists)[devi].get(), (*dev_sums)[devi].get()));
   );
   uint32_t dist_offset = 0;
   FOR_EACH_DEVI(
@@ -700,8 +752,8 @@ KMCUDAResult kmeans_cuda_plus_plus(
 
 KMCUDAResult kmeans_cuda_lloyd(
     float tolerance, uint32_t h_samples_size, uint32_t h_clusters_size,
-    uint16_t h_features_size, bool resume, const std::vector<int> &devs,
-    int32_t verbosity, const udevptrs<float> &samples,
+    uint16_t h_features_size, KMCUDADistanceMetric metric, bool resume,
+    const std::vector<int> &devs, int32_t verbosity, const udevptrs<float> &samples,
     udevptrs<float> *centroids, udevptrs<uint32_t> *ccounts,
     udevptrs<uint32_t> *assignments_prev, udevptrs<uint32_t> *assignments,
     int *iterations = nullptr) {
@@ -723,15 +775,18 @@ KMCUDAResult kmeans_cuda_lloyd(
         std::tie(offset, length) = plans[devi];
         dim3 sgrid(length / sblock.x + 1, 1, 1);
         int shmem_size = shmem_sizes[devi];
-        auto assigner = kmeans_assign_lloyd;
         if (shmem_size - sblock.x * h_features_size * sizeof(float) >=
             (h_features_size + 1) * sizeof(float)) {
-          assigner = kmeans_assign_lloyd_smallc;
+          METRIC_SWITCH(kmeans_assign_lloyd_smallc, <<<sgrid, sblock, shmem_size>>>(
+              length, samples[devi].get() + offset * h_features_size,
+              (*centroids)[devi].get(), (*assignments_prev)[devi].get() + offset,
+              (*assignments)[devi].get() + offset));
+        } else {
+          METRIC_SWITCH(kmeans_assign_lloyd, <<<sgrid, sblock, shmem_size>>>(
+              length, samples[devi].get() + offset * h_features_size,
+              (*centroids)[devi].get(), (*assignments_prev)[devi].get() + offset,
+              (*assignments)[devi].get() + offset));
         }
-        assigner<<<sgrid, sblock, shmem_size>>>(
-            length, samples[devi].get() + offset * h_features_size,
-            (*centroids)[devi].get(), (*assignments_prev)[devi].get() + offset,
-            (*assignments)[devi].get() + offset);
       );
       FOR_EACH_DEVI(
         uint32_t offset, length;
@@ -756,10 +811,10 @@ KMCUDAResult kmeans_cuda_lloyd(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
+      METRIC_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
-          (*centroids)[devi].get(), (*ccounts)[devi].get());
+          (*centroids)[devi].get(), (*ccounts)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
@@ -774,12 +829,13 @@ KMCUDAResult kmeans_cuda_lloyd(
 
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t h_yy_groups_size, uint32_t h_samples_size,
-    uint32_t h_clusters_size, uint16_t h_features_size, const std::vector<int> &devs,
-    int32_t verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<uint32_t> *ccounts, udevptrs<uint32_t> *assignments_prev,
-    udevptrs<uint32_t> *assignments, udevptrs<uint32_t> *assignments_yy,
-    udevptrs<float> *centroids_yy, udevptrs<float> *bounds_yy,
-    udevptrs<float> *drifts_yy, udevptrs<uint32_t> *passed_yy) {
+    uint32_t h_clusters_size, uint16_t h_features_size, KMCUDADistanceMetric metric,
+    const std::vector<int> &devs, int32_t verbosity, const udevptrs<float> &samples,
+    udevptrs<float> *centroids, udevptrs<uint32_t> *ccounts,
+    udevptrs<uint32_t> *assignments_prev, udevptrs<uint32_t> *assignments,
+    udevptrs<uint32_t> *assignments_yy, udevptrs<float> *centroids_yy,
+    udevptrs<float> *bounds_yy, udevptrs<float> *drifts_yy,
+    udevptrs<uint32_t> *passed_yy) {
   if (h_yy_groups_size == 0 || YINYANG_DRAFT_REASSIGNMENTS <= tolerance) {
     if (verbosity > 0) {
       if (h_yy_groups_size == 0) {
@@ -790,15 +846,16 @@ KMCUDAResult kmeans_cuda_yy(
       }
     }
     return kmeans_cuda_lloyd(
-        tolerance, h_samples_size, h_clusters_size, h_features_size, false, devs,
-        verbosity, samples, centroids, ccounts, assignments_prev, assignments);
+        tolerance, h_samples_size, h_clusters_size, h_features_size, metric,
+        false, devs, verbosity, samples, centroids, ccounts, assignments_prev,
+        assignments);
   }
   INFO("running Lloyd until reassignments drop below %" PRIu32 "\n",
        (uint32_t)(YINYANG_DRAFT_REASSIGNMENTS * h_samples_size));
   int iter;
   RETERR(kmeans_cuda_lloyd(
       YINYANG_DRAFT_REASSIGNMENTS, h_samples_size, h_clusters_size, h_features_size,
-      false, devs, verbosity, samples, centroids, ccounts, assignments_prev,
+      metric, false, devs, verbosity, samples, centroids, ccounts, assignments_prev,
       assignments, &iter));
   if (check_changed(iter, tolerance, h_samples_size, devs, 0) < kmcudaSuccess) {
     return kmcudaSuccess;
@@ -823,12 +880,13 @@ KMCUDAResult kmeans_cuda_yy(
     }
     RETERR(kmeans_init_centroids(
         kmcudaInitMethodPlusPlus, h_clusters_size, h_features_size, h_yy_groups_size,
-        0, devs, -1, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy, centroids_yy),
-        INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
-           cudaGetErrorString(cudaGetLastError())));
+        metric, 0, devs, -1, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy,
+        centroids_yy),
+           INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
+                cudaGetErrorString(cudaGetLastError())));
     RETERR(kmeans_cuda_lloyd(
         YINYANG_GROUP_TOLERANCE, h_clusters_size, h_yy_groups_size, h_features_size,
-        false, devs, verbosity, *centroids, centroids_yy,
+        metric, false, devs, verbosity, *centroids, centroids_yy,
         reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs2),
         reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs), assignments_yy));
   }
@@ -884,10 +942,10 @@ KMCUDAResult kmeans_cuda_yy(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
         dim3 sigrid(length / siblock.x + 1, 1, 1);
-        kmeans_yy_init<<<sigrid, siblock, shmem_sizes[devi]>>>(
+        METRIC_SWITCH(kmeans_yy_init, <<<sigrid, siblock, shmem_sizes[devi]>>>(
             length, samples[devi].get() + offset * h_features_size,
             (*centroids)[devi].get(), (*assignments)[devi].get() + offset,
-            (*assignments_yy)[devi].get(), (*bounds_yy)[devi].get());
+            (*assignments_yy)[devi].get(), (*bounds_yy)[devi].get()));
       );
       refresh = false;
     }
@@ -896,10 +954,10 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
+      METRIC_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
-          (*centroids)[devi].get(), (*ccounts)[devi].get());
+          (*centroids)[devi].get(), (*ccounts)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
@@ -913,8 +971,8 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_yy_calc_drifts<<<cgrid, cblock>>>(
-          length, offset, (*centroids)[devi].get(), (*drifts_yy)[devi].get());
+      METRIC_SWITCH(kmeans_yy_calc_drifts, <<<cgrid, cblock>>>(
+          length, offset, (*centroids)[devi].get(), (*drifts_yy)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
@@ -947,18 +1005,18 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = plans[devi];
       dim3 sggrid(length / sgblock.x + 1, 1, 1);
-      kmeans_yy_global_filter<<<sggrid, sgblock>>>(
+      METRIC_SWITCH(kmeans_yy_global_filter, <<<sggrid, sgblock>>>(
           length, samples[devi].get() + offset * h_features_size,
           (*centroids)[devi].get(), (*assignments_yy)[devi].get(),
           (*drifts_yy)[devi].get(), (*assignments)[devi].get() + offset,
           (*assignments_prev)[devi].get() + offset,
-          (*bounds_yy)[devi].get(), (*passed_yy)[devi].get());
+          (*bounds_yy)[devi].get(), (*passed_yy)[devi].get()));
       dim3 slgrid(length / slblock.x + 1, 1, 1);
-      kmeans_yy_local_filter<<<slgrid, slblock, shmem_sizes[devi]>>>(
+      METRIC_SWITCH(kmeans_yy_local_filter, <<<slgrid, slblock, shmem_sizes[devi]>>>(
           samples[devi].get() + offset * h_features_size,
           (*passed_yy)[devi].get(), (*centroids)[devi].get(),
           (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
-          (*assignments)[devi].get() + offset, (*bounds_yy)[devi].get());
+          (*assignments)[devi].get() + offset, (*bounds_yy)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
