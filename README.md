@@ -16,6 +16,7 @@ have several days and 12 GB of GPU memory). 300K samples are grouped
 into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
 Three centroid initialization ways are supported: random, k-means++ and import.
+Two distance metrics are supported: L2 (the usual one) and angular (refined cosine).
 If you've got several GPUs, they can be utilized together and it gives the
 corresponding linear speedup either for Lloyd or Yinyang.
 
@@ -33,6 +34,10 @@ Notes
 Lloyd is tolerant to samples with NaN features while Yinyang is not.
 It may happen that some of the resulting clusters contain zero elements.
 In such cases, their features are set to NaN.
+
+Angular (cosine) distance metric effectively results in Spherical K-Means behavior.
+The samples **must** be normalized to L2 norm equal to 1 before clustering,
+it is not done automatically.
 
 If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
