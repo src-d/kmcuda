@@ -341,8 +341,11 @@ class KMCUDATests(unittest.TestCase):
         angs = numpy.random.rand(10000) * 2 * numpy.pi
         for i in range(10000):
             arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
-        centroids, assignments = kmeans_cuda(
-            arr, 4, init="kmeans++", metric="cos", device=1, verbosity=2, seed=3)
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                arr, 4, init="kmeans++", metric="cos", device=1, verbosity=2,
+                seed=3)
+        self.assertEqual(self._get_iters_number(self.stdout), 6)
         self.assertEqual(len(centroids), 4)
         for c in centroids:
             norm = numpy.linalg.norm(c)
@@ -356,6 +359,32 @@ class KMCUDATests(unittest.TestCase):
         ]).all())
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
+
+    def test_fp16_random_lloyd(self):
+        samples = self.samples.astype(numpy.float16)
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                samples, 50, init="random", device=1,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(centroids.dtype, numpy.float16)
+        centroids = centroids.astype(numpy.float32)
+        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(sys.getrefcount(centroids), 2)
+        self.assertEqual(sys.getrefcount(assignments), 2)
+        self.assertEqual(sys.getrefcount(self.samples), 2)
+        self.assertEqual(centroids.shape, (50, 2))
+        self.assertEqual(assignments.shape, (13000,))
+        self._validate(centroids, assignments, 0.05)
+
+    def test_fp16_kmeanspp_lloyd(self):
+        samples = self.samples.astype(numpy.float16)
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                samples, 50, init="kmeans++", device=1,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(self._get_iters_number(self.stdout), 4)
+        centroids = centroids.astype(numpy.float32)
+        self._validate(centroids, assignments, 0.05)
 
 
 if __name__ == "__main__":

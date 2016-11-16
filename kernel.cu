@@ -361,7 +361,7 @@ __global__ void kmeans_yy_init(
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_calc_drifts(
     const uint32_t border, const uint32_t offset,
-    const float *__restrict__ centroids, float *__restrict__ drifts) {
+    const F *__restrict__ centroids, float *__restrict__ drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= border) {
     return;
