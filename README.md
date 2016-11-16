@@ -16,6 +16,7 @@ have several days and 12 GB of GPU memory). 300K samples are grouped
 into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
 Three centroid initialization ways are supported: random, k-means++ and import.
+Two distance metrics are supported: L2 (the usual one) and angular (refined cosine).
 If you've got several GPUs, they can be utilized together and it gives the
 corresponding linear speedup either for Lloyd or Yinyang.
 
@@ -33,6 +34,10 @@ Notes
 Lloyd is tolerant to samples with NaN features while Yinyang is not.
 It may happen that some of the resulting clusters contain zero elements.
 In such cases, their features are set to NaN.
+
+Angular (cosine) distance metric effectively results in Spherical K-Means behavior.
+The samples **must** be normalized to L2 norm equal to 1 before clustering,
+it is not done automatically.
 
 If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
@@ -95,7 +100,7 @@ Python API
 ----------
 ```python
 def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
-                yinyang_t=0.1, seed=time(), devices=0, verbosity=0)
+                yinyang_t=0.1, metric="L2", seed=time(), devices=0, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
             or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
@@ -113,6 +118,11 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 
 **yinyang_t** float, the relative number of cluster groups, usually 0.1.
 
+**metric** str, the name of the distance metric to use. The default is Euclidean (L2),
+                can be changed to "cos" to behave as Spherical K-means with the
+                angular distance. Please note that samples *must* be normalized in that
+                case.
+
 **seed** integer, random generator seed for reproducible results.
 
 **devices** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
@@ -129,10 +139,11 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 C API
 -----
 ```C
-int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
-                uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
-                uint32_t seed, uint32_t device, int device_ptrs, int32_t verbosity,
-                const float *samples, float *centroids, uint32_t *assignments)
+KMCUDAResult kmeans_cuda(
+    KMCUDAInitMethod init, float tolerance, float yinyang_t,
+    KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
+    uint32_t clusters_size, uint32_t seed, uint32_t device, int device_ptrs,
+    int32_t verbosity, const float *samples, float *centroids, uint32_t *assignments)
 ```
 **init** specifies the centroids initialization method: k-means++, random or import
          (in the latter case, **centroids** is read).
@@ -140,6 +151,10 @@ int kmeans_cuda(KMCUDAInitMethod init, float tolerance, float yinyang_t,
 **tolerance** if the number of reassignments drop below this ratio, stop.
 
 **yinyang_t** the relative number of cluster groups, usually 0.1.
+
+**metric** The distance metric to use. The default is Euclidean (L2), can be
+           changed to cosine to behave as Spherical K-means with the angular
+           distance. Please note that samples *must* be normalized in that case.
 
 **samples_size** number of samples.
 
