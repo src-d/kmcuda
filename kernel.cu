@@ -75,6 +75,34 @@ __device__ __forceinline__ float distance<kmcudaDistanceMetricCosine>(
 }
 
 template <KMCUDADistanceMetric M>
+__device__ __forceinline__ void normalize(uint32_t count, float *vec);
+
+template <>
+__device__ __forceinline__ void normalize<kmcudaDistanceMetricL2>(
+    uint32_t count, float *vec) {
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    vec[f] /= count;
+  }
+}
+
+template <>
+__device__ __forceinline__ void normalize<kmcudaDistanceMetricCosine>(
+    uint32_t count __attribute__((unused)), float *vec) {
+  float norm = 0;
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    float v = vec[f];
+    norm += v * v;
+  }
+  norm = sqrt(norm);
+  #pragma unroll 4
+  for (int f = 0; f < d_features_size; f++) {
+    vec[f] /= norm;
+  }
+}
+
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_plus_plus(
     const uint32_t border, const uint32_t cc, const float *__restrict__ samples,
     const float *__restrict__ centroids, float *__restrict__ dists,
@@ -282,6 +310,7 @@ __global__ void kmeans_assign_lloyd(
   }
 }
 
+template <KMCUDADistanceMetric M>
 __global__ void kmeans_adjust(
     const uint32_t border, const uint32_t coffset,
     const float *__restrict__ samples,
@@ -331,12 +360,9 @@ __global__ void kmeans_adjust(
       }
     }
   }
-  // my_count can be 0 => we get NaN and never use this cluster again
+  // my_count can be 0 => we get NaN with L2 and never use this cluster again
   // this is a feature, not a bug
-  #pragma unroll 4
-  for (int f = 0; f < d_features_size; f++) {
-    centroids[f] /= my_count;
-  }
+  normalize<M>(my_count, centroids);
   ccounts[c] = my_count;
 }
 
@@ -785,10 +811,10 @@ KMCUDAResult kmeans_cuda_lloyd(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
+      METRIC_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
-          (*centroids)[devi].get(), (*ccounts)[devi].get());
+          (*centroids)[devi].get(), (*ccounts)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
@@ -928,10 +954,10 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      kmeans_adjust<<<cgrid, cblock, shmem_sizes[devi]>>>(
+      METRIC_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, samples[devi].get(),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
-          (*centroids)[devi].get(), (*ccounts)[devi].get());
+          (*centroids)[devi].get(), (*ccounts)[devi].get()));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
