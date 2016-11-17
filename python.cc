@@ -197,21 +197,18 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     }
   } else {
     samples_array.reset(PyArray_FROM_OTF(
-        samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+        samples_obj, NPY_FLOAT16, NPY_ARRAY_IN_ARRAY));
     if (!samples_array) {
+      PyErr_Clear();
       samples_array.reset(PyArray_FROM_OTF(
-          samples_obj, NPY_FLOAT16, NPY_ARRAY_IN_ARRAY));
+          samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
       if (!samples_array) {
         PyErr_SetString(PyExc_TypeError,
                         "\"samples\" must be a 2D float32 or float16 numpy array");
         return NULL;
       }
-      fp16x2 = 1;
-    }
-    if (!PyArray_ISCARRAY(samples_array.get())) {
-      PyErr_SetString(PyExc_ValueError,
-                      "\"samples\" must be a contiguous array in native byte order");
-      return NULL;
+    } else {
+      fp16x2 = true;
     }
     auto ndims = PyArray_NDIM(samples_array.get());
     if (ndims != 2) {
@@ -222,7 +219,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     samples_size = static_cast<uint32_t>(dims[0]);
     features_size = static_cast<uint32_t>(dims[1]);
     if (fp16x2 && PyArray_TYPE(samples_array.get()) == NPY_FLOAT16) {
-      if (features_size % 2 == 0) {
+      if (features_size % 2 != 0) {
         PyErr_SetString(PyExc_ValueError,
                         "the number of features must be even in fp16 mode");
         return NULL;
