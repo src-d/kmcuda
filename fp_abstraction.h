@@ -49,7 +49,7 @@ FPATTR float _const(int v) {
 }
 
 FPATTR half _fin(half2 v) {
-  return __hadd_sat(__high2half(v), __low2half(v));
+  return __hadd(__high2half(v), __low2half(v));
 }
 
 FPATTR float _fin(float v) {
@@ -102,7 +102,7 @@ FPATTR bool _neq(float v1, float v2) {
 }
 
 FPATTR half2 _add(half2 v1, half2 v2) {
-  return __hadd2_sat(v1, v2);
+  return __hadd2(v1, v2);
 }
 
 FPATTR float _add(float v1, float v2) {
@@ -110,7 +110,7 @@ FPATTR float _add(float v1, float v2) {
 }
 
 FPATTR half2 _sub(half2 v1, half2 v2) {
-  return __hsub2_sat(v1, v2);
+  return __hsub2(v1, v2);
 }
 
 FPATTR float _sub(float v1, float v2) {
@@ -118,7 +118,7 @@ FPATTR float _sub(float v1, float v2) {
 }
 
 FPATTR half2 _mul(half2 v1, half2 v2) {
-  return __hmul2_sat(v1, v2);
+  return __hmul2(v1, v2);
 }
 
 FPATTR float _mul(float v1, float v2) {
@@ -138,7 +138,7 @@ FPATTR float _reciprocal(float v) {
 }
 
 FPATTR half2 _fma(half2 acc, half2 v1, half2 v2) {
-  return __hfma2_sat(v1, v2, acc);
+  return __hfma2(v1, v2, acc);
 }
 
 FPATTR float _fma(float acc, float v1, float v2) {
