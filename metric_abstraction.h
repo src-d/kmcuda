@@ -23,13 +23,18 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
   }
 
   FPATTR static float distance(const F *__restrict__ v1, const F *__restrict__ v2) {
+    // Kahan summation with inverted c
     F dist = _const<F>(0);
+    F corr = _const<F>(0);
     #pragma unroll 4
     for (uint16_t f = 0; f < d_features_size; f++) {
       F d = _sub(v1[f], v2[f]);
-      dist = _fma(dist, d, d);
+      F y = _fma(corr, d, d);
+      F t = _add(dist, y);
+      corr = _sub(y, _sub(t, dist));
+      dist = t;
     }
-    return sqrt(_float(_fin(dist)));
+    return _sqrt(_float(_fin(dist)));
   }
 
   FPATTR static void normalize(uint32_t count, F *vec) {
@@ -46,28 +51,47 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
   FPATTR static typename HALF<F>::type distance(F sqr1, F sqr2, F prod) {
     float fsqr1 = _float(_fin(sqr1)), fsqr2 = _float(_fin(sqr2)),
         fprod = _float(_fin(prod));
-    return _half<F>(acos(fprod / sqrt(fsqr1 * fsqr2)));
+    return _half<F>(acos(fprod / _sqrt(fsqr1 * fsqr2)));
   }
 
   FPATTR static float distance(const F *__restrict__ v1, const F *__restrict__ v2) {
+    // Kahan summation with inverted c
     F n1 = _const<F>(0), n2 = _const<F>(0), prod = _const<F>(0);
+    F corr1 = _const<F>(0), corr2 = _const<F>(0), corrprod = _const<F>(0);
     #pragma unroll 4
     for (uint16_t f = 0; f < d_features_size; f++) {
       F f1 = v1[f];
       F f2 = v2[f];
-      n1 = _fma(n1, f1, f1);
-      n2 = _fma(n2, f2, f2);
-      prod = _fma(prod, f1, f2);
+
+      F y1 = _fma(corr1, f1, f1);
+      F t1 = _add(n1, y1);
+      corr1 = _sub(y1, _sub(t1, n1));
+      n1 = t1;
+
+      F y2 = _fma(corr2, f2, f2);
+      F t2 = _add(n2, y2);
+      corr2 = _sub(y2, _sub(t2, n2));
+      n2 = t2;
+
+      F yprod = _fma(corrprod, f1, f2);
+      F tprod = _add(prod, yprod);
+      corrprod = _sub(yprod, _sub(tprod, prod));
+      prod = tprod;
     }
     return _float(distance(n1, n2, prod));
   }
 
   FPATTR static void normalize(uint32_t count __attribute__((unused)), F *vec) {
+    // Kahan summation with inverted c
     F norm = _const<F>(0);
+    F corr = _const<F>(0);
     #pragma unroll 4
     for (int f = 0; f < d_features_size; f++) {
       F v = vec[f];
-      norm = _fma(norm, v, v);
+      F y = _fma(corr, v, v);
+      F t = _add(norm, y);
+      corr = _sub(y, _sub(t, norm));
+      norm = t;
     }
 
     norm = _fout(_reciprocal(_sqrt(_fin(norm))));

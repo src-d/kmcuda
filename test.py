@@ -387,6 +387,17 @@ class KMCUDATests(unittest.TestCase):
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.05)
 
+    def test_fp16_kmeanspp_validate(self):
+        centroids32, _ = kmeans_cuda(
+            self.samples, 50, init="kmeans++", device=1,
+            verbosity=2, seed=3, tolerance=1.0, yinyang_t=0)
+        samples = self.samples.astype(numpy.float16)
+        centroids16, _ = kmeans_cuda(
+            samples, 50, init="kmeans++", device=1,
+            verbosity=2, seed=3, tolerance=1.0, yinyang_t=0)
+        delta = numpy.max(abs(centroids16[:4] - centroids32[:4]))
+        self.assertLess(delta, 1.5e-4)
+
 
 if __name__ == "__main__":
     unittest.main()
