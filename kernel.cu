@@ -110,16 +110,7 @@ __global__ void kmeans_assign_lloyd_smallc(
   F ssqr = _const<F>(0);
   const uint32_t soffset = threadIdx.x * d_features_size;
   if (!insane) {
-    F corr = _const<F>(0);
-    #pragma unroll 4
-    for (int f = 0; f < d_features_size; f++) {
-      F v = samples[f];
-      shared_samples[soffset + f] = v;
-      F y = _fma(corr, v, v);
-      F t = _add(ssqr, y);
-      corr = _sub(y, _sub(t, ssqr));
-      ssqr = t;
-    }
+    ssqr = METRIC<M, F>::sum_squares(samples, shared_samples + soffset);
   }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
@@ -130,17 +121,8 @@ __global__ void kmeans_assign_lloyd_smallc(
       uint32_t local_offset = ci * d_features_size;
       uint32_t global_offset = coffset + local_offset;
       if (global_offset < d_clusters_size * d_features_size && ci < cstep) {
-        F csqr = _const<F>(0), corr = _const<F>(0);
-        #pragma unroll 4
-        for (int f = 0; f < d_features_size; f++) {
-          F v = centroids[global_offset + f];
-          shared_centroids[local_offset + f] = v;
-          F y = _fma(corr, v, v);
-          F t = _add(csqr, y);
-          corr = _sub(y, _sub(t, csqr));
-          csqr = t;
-        }
-        csqrs[ci] = csqr;
+        csqrs[ci] = METRIC<M, F>::sum_squares(
+            centroids + global_offset, shared_centroids + local_offset);
       }
     }
     __syncthreads();
@@ -203,15 +185,7 @@ __global__ void kmeans_assign_lloyd(
   bool insane = _neq(samples[0], samples[0]);
   F ssqr = _const<F>(0);
   if (!insane) {
-    F corr = _const<F>(0);
-    #pragma unroll 4
-    for (int f = 0; f < d_features_size; f++) {
-      F v = samples[f];
-      F y = _fma(corr, v, v);
-      F t = _add(ssqr, y);
-      corr = _sub(y, _sub(t, ssqr));
-      ssqr = t;
-    }
+    ssqr = METRIC<M, F>::sum_squares(samples, nullptr);
   }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
@@ -222,17 +196,8 @@ __global__ void kmeans_assign_lloyd(
       uint32_t local_offset = ci * d_features_size;
       uint32_t global_offset = coffset + local_offset;
       if (global_offset < d_clusters_size * d_features_size && ci < cstep) {
-        F csqr = _const<F>(0), corr = _const<F>(0);
-        #pragma unroll 4
-        for (int f = 0; f < d_features_size; f++) {
-          F v = centroids[global_offset + f];
-          shared_centroids[local_offset + f] = v;
-          F y = _fma(corr, v, v);
-          F t = _add(csqr, y);
-          corr = _sub(y, _sub(t, csqr));
-          csqr = t;
-        }
-        csqrs[ci] = csqr;
+        csqrs[ci] = METRIC<M, F>::sum_squares(
+            centroids + global_offset, shared_centroids + local_offset);
       }
     }
     __syncthreads();

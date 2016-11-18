@@ -345,17 +345,17 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 arr, 4, init="kmeans++", metric="cos", device=1, verbosity=2,
                 seed=3)
-        self.assertEqual(self._get_iters_number(self.stdout), 6)
+        self.assertEqual(self._get_iters_number(self.stdout), 5)
         self.assertEqual(len(centroids), 4)
         for c in centroids:
             norm = numpy.linalg.norm(c)
             self.assertTrue(0.9999 < norm < 1.0001)
-        dists = numpy.round(cosine_distances(centroids))
+        dists = numpy.round(cosine_distances(centroids)).astype(int)
         self.assertTrue((dists == [
-            [0, 1, 1, 2],
-            [1, 0, 2, 1],
-            [1, 2, 0, 1],
-            [2, 1, 1, 0],
+            [0, 2, 1, 1],
+            [2, 0, 1, 1],
+            [1, 1, 0, 2],
+            [1, 1, 2, 0],
         ]).all())
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
@@ -427,17 +427,17 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 arr, 4, init="kmeans++", metric="cos", device=1, verbosity=2,
                 seed=3)
-        self.assertEqual(self._get_iters_number(self.stdout), 6)
+        self.assertEqual(self._get_iters_number(self.stdout), 5)
         self.assertEqual(len(centroids), 4)
         for c in centroids:
             norm = numpy.linalg.norm(c)
             self.assertTrue(0.9995 < norm < 1.0005)
-        dists = numpy.round(cosine_distances(centroids))
+        dists = numpy.round(cosine_distances(centroids)).astype(int)
         self.assertTrue((dists == [
-            [0, 1, 1, 2],
-            [1, 0, 2, 1],
-            [1, 2, 0, 1],
-            [2, 1, 1, 0],
+            [0, 2, 1, 1],
+            [2, 0, 1, 1],
+            [1, 1, 0, 2],
+            [1, 1, 2, 0],
         ]).all())
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
