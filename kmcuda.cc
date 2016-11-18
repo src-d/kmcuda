@@ -67,7 +67,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
     if (device & 1) {
       devs.push_back(dev);
       if (cudaSetDevice(dev) != cudaSuccess) {
-        INFO("failed to validate device %d", dev);
+        INFO("failed to validate device %d\n", dev);
         devs.pop_back();
       }
     }

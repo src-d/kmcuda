@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 import numpy
-from libKMCUDA import kmeans_cuda
+from libKMCUDA import kmeans_cuda, supports_fp16
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_distances
 
@@ -360,6 +360,8 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
 
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
     def test_fp16_random_lloyd(self):
         samples = self.samples.astype(numpy.float16)
         with self.stdout:
@@ -376,6 +378,8 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
 
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
     def test_fp16_kmeanspp_lloyd(self):
         samples = self.samples.astype(numpy.float16)
         with self.stdout:
@@ -386,6 +390,8 @@ class KMCUDATests(unittest.TestCase):
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.05)
 
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
     def test_fp16_kmeanspp_validate(self):
         centroids32, _ = kmeans_cuda(
             self.samples, 50, init="kmeans++", device=1,
@@ -397,6 +403,8 @@ class KMCUDATests(unittest.TestCase):
         delta = numpy.max(abs(centroids16[:4] - centroids32[:4]))
         self.assertLess(delta, 1.5e-4)
 
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
     def test_fp16_kmeanspp_yinyang(self):
         samples = self.samples.astype(numpy.float16)
         with self.stdout:
@@ -408,6 +416,8 @@ class KMCUDATests(unittest.TestCase):
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.01)
 
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
     def test_fp16_cosine_metric(self):
         arr = numpy.empty((10000, 2), dtype=numpy.float16)
         angs = numpy.random.rand(10000) * 2 * numpy.pi

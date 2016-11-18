@@ -39,6 +39,7 @@ PyMODINIT_FUNC PyInit_libKMCUDA(void) {
   }
   // numpy
   import_array();
+  PyObject_SetAttrString(m, "supports_fp16", Py_True);
   return m;
 }
 }
