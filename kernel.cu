@@ -97,11 +97,15 @@ __global__ void kmeans_assign_lloyd_smallc(
   F ssqr = _const<F>(0);
   const uint32_t soffset = threadIdx.x * d_features_size;
   if (!insane) {
+    F corr = _const<F>(0);
     #pragma unroll 4
     for (int f = 0; f < d_features_size; f++) {
       F v = samples[f];
       shared_samples[soffset + f] = v;
-      ssqr = _fma(ssqr, v, v);
+      F y = _fma(corr, v, v);
+      F t = _add(ssqr, y);
+      corr = _sub(y, _sub(t, ssqr));
+      ssqr = t;
     }
   }
 
@@ -113,12 +117,15 @@ __global__ void kmeans_assign_lloyd_smallc(
       uint32_t local_offset = ci * d_features_size;
       uint32_t global_offset = coffset + local_offset;
       if (global_offset < d_clusters_size * d_features_size && ci < cstep) {
-        F csqr = _const<F>(0);
+        F csqr = _const<F>(0), corr = _const<F>(0);
         #pragma unroll 4
         for (int f = 0; f < d_features_size; f++) {
           F v = centroids[global_offset + f];
           shared_centroids[local_offset + f] = v;
-          csqr = _fma(csqr, v, v);
+          F y = _fma(corr, v, v);
+          F t = _add(csqr, y);
+          corr = _sub(y, _sub(t, csqr));
+          csqr = t;
         }
         csqrs[ci] = csqr;
       }
@@ -128,12 +135,14 @@ __global__ void kmeans_assign_lloyd_smallc(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      F product = _const<F>(0);
+      F product = _const<F>(0), corr = _const<F>(0);
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        product = _fma(
-            product, shared_samples[soffset + f], shared_centroids[coffset + f]);
+        F y = _fma(corr, shared_samples[soffset + f], shared_centroids[coffset + f]);
+        F t = _add(product, y);
+        corr = _sub(y, _sub(t, product));
+        product = t;
       }
       HF dist = METRIC<M, F>::distance(ssqr, csqrs[c - gc], product);
       if (_lt(dist, min_dist)) {
@@ -181,10 +190,14 @@ __global__ void kmeans_assign_lloyd(
   bool insane = _neq(samples[0], samples[0]);
   F ssqr = _const<F>(0);
   if (!insane) {
+    F corr = _const<F>(0);
     #pragma unroll 4
     for (int f = 0; f < d_features_size; f++) {
       F v = samples[f];
-      ssqr = _fma(ssqr, v, v);
+      F y = _fma(corr, v, v);
+      F t = _add(ssqr, y);
+      corr = _sub(y, _sub(t, ssqr));
+      ssqr = t;
     }
   }
 
@@ -196,12 +209,15 @@ __global__ void kmeans_assign_lloyd(
       uint32_t local_offset = ci * d_features_size;
       uint32_t global_offset = coffset + local_offset;
       if (global_offset < d_clusters_size * d_features_size && ci < cstep) {
-        F csqr = _const<F>(0);
+        F csqr = _const<F>(0), corr = _const<F>(0);
         #pragma unroll 4
         for (int f = 0; f < d_features_size; f++) {
           F v = centroids[global_offset + f];
           shared_centroids[local_offset + f] = v;
-          csqr = _fma(csqr, v, v);
+          F y = _fma(corr, v, v);
+          F t = _add(csqr, y);
+          corr = _sub(y, _sub(t, csqr));
+          csqr = t;
         }
         csqrs[ci] = csqr;
       }
@@ -211,11 +227,14 @@ __global__ void kmeans_assign_lloyd(
       continue;
     }
     for (uint32_t c = gc; c < gc + cstep && c < d_clusters_size; c++) {
-      F product = _const<F>(0);
+      F product = _const<F>(0), corr = _const<F>(0);
       coffset = (c - gc) * d_features_size;
       #pragma unroll 4
       for (int f = 0; f < d_features_size; f++) {
-        product = _fma(product, samples[f], shared_centroids[coffset + f]);
+        F y = _fma(corr, samples[f], shared_centroids[coffset + f]);
+        F t = _add(product, y);
+        corr = _sub(y, _sub(t, product));
+        product = t;
       }
       HF dist = METRIC<M, F>::distance(ssqr, csqrs[c - gc], product);
       if (_lt(dist, min_dist)) {
@@ -263,6 +282,7 @@ __global__ void kmeans_adjust(
   }
   extern __shared__ uint32_t ass[];
   int step = d_shmem_size / 2;
+  F corr = _const<F>(0);
   for (uint32_t sbase = 0; sbase < d_samples_size; sbase += step) {
     __syncthreads();
     if (threadIdx.x == 0) {
@@ -290,7 +310,11 @@ __global__ void kmeans_adjust(
         F fsign = _const<F>(sign);
         #pragma unroll 4
         for (int f = 0; f < d_features_size; f++) {
-          centroids[f] = _fma(centroids[f], samples[soffset + f], fsign);
+          F centroid = centroids[f];
+          F y = _fma(corr, samples[soffset + f], fsign);
+          F t = _add(centroid, y);
+          corr = _sub(y, _sub(t, centroid));
+          centroids[f] = t;
         }
       }
     }
@@ -303,8 +327,8 @@ __global__ void kmeans_adjust(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_init(
-    const uint32_t border, const float *__restrict__ samples,
-    const float *__restrict__ centroids, const uint32_t *__restrict__ assignments,
+    const uint32_t border, const F *__restrict__ samples,
+    const F *__restrict__ centroids, const uint32_t *__restrict__ assignments,
     const uint32_t *__restrict__ groups, float *__restrict__ volatile bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= border) {
@@ -318,7 +342,7 @@ __global__ void kmeans_yy_init(
   samples += static_cast<uint64_t>(sample) * d_features_size;
   uint32_t nearest = assignments[sample];
   extern __shared__ float shared_memory[];
-  float *volatile shared_centroids = shared_memory;
+  F *volatile shared_centroids = reinterpret_cast<F*>(shared_memory);
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
@@ -361,15 +385,15 @@ __global__ void kmeans_yy_init(
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_calc_drifts(
     const uint32_t border, const uint32_t offset,
-    const F *__restrict__ centroids, float *__restrict__ drifts) {
+    const F *__restrict__ centroids, F *__restrict__ drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
   if (c >= border) {
     return;
   }
   c += offset;
   uint32_t coffset = c * d_features_size;
-  drifts[d_clusters_size * d_features_size + c] = METRIC<M, F>::distance(
-      centroids + coffset, drifts + coffset);
+  (reinterpret_cast<float *>(drifts))[d_clusters_size * d_features_size + c] =
+      METRIC<M, F>::distance(centroids + coffset, drifts + coffset);
 }
 
 __global__ void kmeans_yy_find_group_max_drifts(
@@ -413,8 +437,8 @@ __global__ void kmeans_yy_find_group_max_drifts(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_global_filter(
-    const uint32_t border, const float *__restrict__ samples,
-    const float *__restrict__ centroids, const uint32_t *__restrict__ groups,
+    const uint32_t border, const F *__restrict__ samples,
+    const F *__restrict__ centroids, const uint32_t *__restrict__ groups,
     const float *__restrict__ drifts, const uint32_t *__restrict__ assignments,
     uint32_t *__restrict__ assignments_prev, float *__restrict__ bounds,
     uint32_t *__restrict__ passed) {
@@ -458,8 +482,8 @@ __global__ void kmeans_yy_global_filter(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_local_filter(
-    const float *__restrict__ samples,
-    const uint32_t *__restrict__ passed, const float *__restrict__ centroids,
+    const F *__restrict__ samples,
+    const uint32_t *__restrict__ passed, const F *__restrict__ centroids,
     const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
     uint32_t *__restrict__ assignments, float *__restrict__ bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
@@ -476,7 +500,7 @@ __global__ void kmeans_yy_local_filter(
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
   uint32_t nearest = cluster;
   extern __shared__ float shared_memory[];
-  float *volatile shared_centroids = shared_memory;
+  F *volatile shared_centroids = reinterpret_cast<F*>(shared_memory);
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, d_passed_number - blockIdx.x * blockDim.x) + 1;
@@ -884,14 +908,12 @@ KMCUDAResult kmeans_cuda_yy(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
         dim3 sigrid(length / siblock.x + 1, 1, 1);
-        /*
         KERNEL_SWITCH(kmeans_yy_init, <<<sigrid, siblock, shmem_sizes[devi]>>>(
             length,
             reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
             reinterpret_cast<const F*>((*centroids)[devi].get()),
             (*assignments)[devi].get() + offset,
             (*assignments_yy)[devi].get(), (*bounds_yy)[devi].get()));
-        */
       );
       refresh = false;
     }
@@ -917,11 +939,9 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
       dim3 cgrid(length / cblock.x + 1, 1, 1);
-      /*
       KERNEL_SWITCH(kmeans_yy_calc_drifts, <<<cgrid, cblock>>>(
           length, offset, reinterpret_cast<const F*>((*centroids)[devi].get()),
-          (*drifts_yy)[devi].get()));
-      */
+          reinterpret_cast<F*>((*drifts_yy)[devi].get())));
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;
@@ -954,20 +974,19 @@ KMCUDAResult kmeans_cuda_yy(
       uint32_t offset, length;
       std::tie(offset, length) = plans[devi];
       dim3 sggrid(length / sgblock.x + 1, 1, 1);
-      /*
       KERNEL_SWITCH(kmeans_yy_global_filter, <<<sggrid, sgblock>>>(
-          length, samples[devi].get() + offset * h_features_size,
-          (*centroids)[devi].get(), (*assignments_yy)[devi].get(),
-          (*drifts_yy)[devi].get(), (*assignments)[devi].get() + offset,
-          (*assignments_prev)[devi].get() + offset,
+          length,
+          reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
+          reinterpret_cast<const F*>((*centroids)[devi].get()),
+          (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
+          (*assignments)[devi].get() + offset, (*assignments_prev)[devi].get() + offset,
           (*bounds_yy)[devi].get(), (*passed_yy)[devi].get()));
       dim3 slgrid(length / slblock.x + 1, 1, 1);
       KERNEL_SWITCH(kmeans_yy_local_filter, <<<slgrid, slblock, shmem_sizes[devi]>>>(
-          samples[devi].get() + offset * h_features_size,
-          (*passed_yy)[devi].get(), (*centroids)[devi].get(),
+          reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
+          (*passed_yy)[devi].get(), reinterpret_cast<const F*>((*centroids)[devi].get()),
           (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
           (*assignments)[devi].get() + offset, (*bounds_yy)[devi].get()));
-      */
     );
     FOR_EACH_DEVI(
       uint32_t offset, length;

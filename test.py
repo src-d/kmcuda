@@ -368,8 +368,7 @@ class KMCUDATests(unittest.TestCase):
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
         self.assertEqual(centroids.dtype, numpy.float16)
         centroids = centroids.astype(numpy.float32)
-        # fp16 bad precision makes it even longer to converge
-        self.assertEqual(self._get_iters_number(self.stdout), 10)
+        self.assertEqual(self._get_iters_number(self.stdout), 9)
         self.assertEqual(sys.getrefcount(centroids), 2)
         self.assertEqual(sys.getrefcount(assignments), 2)
         self.assertEqual(sys.getrefcount(self.samples), 2)
@@ -383,7 +382,7 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 samples, 50, init="kmeans++", device=1,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
-        self.assertEqual(self._get_iters_number(self.stdout), 6)
+        self.assertEqual(self._get_iters_number(self.stdout), 5)
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.05)
 
@@ -397,6 +396,17 @@ class KMCUDATests(unittest.TestCase):
             verbosity=2, seed=3, tolerance=1.0, yinyang_t=0)
         delta = numpy.max(abs(centroids16[:4] - centroids32[:4]))
         self.assertLess(delta, 1.5e-4)
+
+    def test_fp16_kmeanspp_yinyang(self):
+        samples = self.samples.astype(numpy.float16)
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                samples, 50, init="kmeans++", device=1,
+                verbosity=2, seed=3, tolerance=0.01, yinyang_t=0.1)
+        # fp16 precision increases the number of iterations
+        self.assertEqual(self._get_iters_number(self.stdout), 19 + 5)
+        centroids = centroids.astype(numpy.float32)
+        self._validate(centroids, assignments, 0.01)
 
 
 if __name__ == "__main__":
