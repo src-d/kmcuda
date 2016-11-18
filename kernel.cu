@@ -28,6 +28,18 @@ __constant__ uint32_t d_clusters_size;
 __constant__ uint32_t d_yy_groups_size;
 __constant__ int d_shmem_size;
 
+// https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
+__device__ __forceinline__ uint32_t atomicAggInc(uint32_t *ctr) {
+  int mask = __ballot(1);
+  int leader = __ffs(mask) - 1;
+  uint32_t res;
+  if ((threadIdx.x % 32) == leader) {
+    res = atomicAdd(ctr, __popc(mask));
+  }
+  res = __shfl(res, leader);
+  return res + __popc(mask & ((1 << (threadIdx.x % 32)) - 1));
+}
+
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_plus_plus(
     const uint32_t border, const uint32_t cc, const F *__restrict__ samples,
@@ -164,7 +176,7 @@ __global__ void kmeans_assign_lloyd_smallc(
   assignments_prev[sample] = ass;
   if (ass != nearest) {
     assignments[sample] = nearest;
-    atomicAdd(&d_changed_number, 1);
+    atomicAggInc(&d_changed_number);
   }
 }
 
@@ -256,7 +268,7 @@ __global__ void kmeans_assign_lloyd(
   assignments_prev[sample] = ass;
   if (ass != nearest) {
     assignments[sample] = nearest;
-    atomicAdd(&d_changed_number, 1);
+    atomicAggInc(&d_changed_number);
   }
 }
 
@@ -477,7 +489,7 @@ __global__ void kmeans_yy_global_filter(
     return;
   }
   // D'oh!
-  passed[atomicAdd(&d_passed_number, 1)] = sample;
+  passed[atomicAggInc(&d_passed_number)] = sample;
 }
 
 template <KMCUDADistanceMetric M, typename F>
@@ -564,7 +576,7 @@ __global__ void kmeans_yy_local_filter(
   bounds[-1] = min_dist;
   if (cluster != nearest) {
     assignments[sample] = nearest;
-    atomicAdd(&d_changed_number, 1);
+    atomicAggInc(&d_changed_number);
   }
 }
 
