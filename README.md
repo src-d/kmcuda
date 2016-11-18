@@ -17,8 +17,9 @@ into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can
 turned off to save GPU memory but the slower Lloyd will be used then.
 Three centroid initialization ways are supported: random, k-means++ and import.
 Two distance metrics are supported: L2 (the usual one) and angular (refined cosine).
-If you've got several GPUs, they can be utilized together and it gives the
-corresponding linear speedup either for Lloyd or Yinyang.
+16-bit float support delivers 2x speedup (32-bit float postprocessing may be
+required for finer results). If you've got several GPUs, they can be utilized
+together and it gives the corresponding linear speedup either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
 results from Yinyang and Lloyd.
@@ -45,9 +46,12 @@ If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
 (all GPU allocation happens at startup).
 
-Data type is either 32 or 16-bit float. Number of samples is limited by 1^32,
+Data type is either 32- or 16-bit float. Number of samples is limited by 1^32,
 clusters by 1^32 and features by 1^16 (1^17 for fp16). Besides, the product of
 clusters number and features number may not exceed 1^32.
+
+In the case of 16-bit floats, the reduced precision often leads to a slightly
+increased number of iterations, Yinyang is especially sensitive to that.
 
 Building
 --------
