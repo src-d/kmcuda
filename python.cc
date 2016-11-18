@@ -90,18 +90,18 @@ static void set_cuda_memcpy_error() {
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0;
-  int fp16x2 = 0;
+  bool fp16x2 = false;
   float tolerance = .01, yinyang_t = .1;
   PyObject *samples_obj, *init_obj = Py_None, *metric_obj = Py_None;
   static const char *kwlist[] = {
       "samples", "clusters", "tolerance", "init", "yinyang_t", "metric", "seed",
-      "device", "fp16x2", "verbosity", NULL};
+      "device", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fOfOIIpi", const_cast<char**>(kwlist), &samples_obj,
+      args, kwargs, "OI|fOfOIIi", const_cast<char**>(kwlist), &samples_obj,
       &clusters_size, &tolerance, &init_obj, &yinyang_t, &metric_obj, &seed,
-      &device, &fp16x2, &verbosity)) {
+      &device, &verbosity)) {
     return NULL;
   }
 
@@ -183,6 +183,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     }
     samples_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 0));
     features_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 1));
+    if (PyTuple_Size(member3) == 3) {
+      fp16x2 = PyObject_IsTrue(PyTuple_GetItem(member3, 2));
+    }
     if (size == 5) {
       auto member4 = PyTuple_GetItem(samples_obj, 3),
            member5 = PyTuple_GetItem(samples_obj, 4);

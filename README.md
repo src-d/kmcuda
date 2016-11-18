@@ -128,10 +128,11 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
                 yinyang_t=0.1, metric="L2", seed=time(), devices=0, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
-            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
+            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features\[, fp16x2 marker\]))).
             In the latter case, negative device index means host pointer. Optionally,
             the tuple can be 2 items longer with preallocated device pointers for
-            centroids and assignments. dtype must be float32.
+            centroids and assignments. dtype must be either float16 or
+            convertible to float32.
 
 **clusters** integer, the number of clusters.
 
@@ -159,7 +160,8 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
               
  **return** tuple(centroids, assignments). If **samples** was a numpy array or
             a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
-            (integers) allocated on the same device.
+            (integers) allocated on the same device. If **samples** are float16,
+            the returned centroids are float16 too.
 
 C API
 -----
@@ -167,8 +169,9 @@ C API
 KMCUDAResult kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, uint32_t device, int device_ptrs,
-    int32_t verbosity, const float *samples, float *centroids, uint32_t *assignments)
+    uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
+    int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
+    uint32_t *assignments)
 ```
 **init** specifies the centroids initialization method: k-means++, random or import
          (in the latter case, **centroids** is read).
@@ -183,7 +186,7 @@ KMCUDAResult kmeans_cuda(
 
 **samples_size** number of samples.
 
-**features_size** number of features.
+**features_size** number of features. if fp16x2 is set, one half of the number of features.
 
 **clusters_size** number of clusters.
 
@@ -199,6 +202,10 @@ KMCUDAResult kmeans_cuda(
                 to be a pointer to device #0's memory and the resulting **centroids** and
                 **assignments** are expected to be preallocated on device #0 as well.
                 Usually the value is -1.
+                
+**fp16x2** activates fp16 mode, two half-floats are packed into a single 32-bit float,
+           features_size becomes effectively 2 times bigger, the returned
+           centroids are fp16x2 too.
 
 **verbosity** 0 - no output; 1 - progress output; >=2 - debug output.
 

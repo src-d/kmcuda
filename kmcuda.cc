@@ -234,8 +234,8 @@ KMCUDAResult kmeans_init_centroids(
 KMCUDAResult kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, uint32_t device, int device_ptrs,
-    int fp16x2, int32_t verbosity, const float *samples, float *centroids,
+    uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
+    int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
     uint32_t *assignments) {
   DEBUG("arguments: %d %.3f %.2f %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %"
         PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p\n", init, tolerance,
