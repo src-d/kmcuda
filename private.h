@@ -132,6 +132,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
        kmcudaMemoryCopyError); \
 } while(false)
 
+#if CUDA_ARCH >= 60
 #define KERNEL_SWITCH(f, ...) do { switch (metric) { \
   case kmcudaDistanceMetricL2: \
     if (!fp16x2) { \
@@ -152,6 +153,18 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
     } \
     break; \
 } } while(false)
+#else
+#define KERNEL_SWITCH(f, ...) do { switch (metric) { \
+  case kmcudaDistanceMetricL2: \
+    using F = float; \
+    f<kmcudaDistanceMetricL2, float>__VA_ARGS__; \
+    break; \
+  case kmcudaDistanceMetricCosine: \
+    using F = float; \
+    f<kmcudaDistanceMetricCosine, float>__VA_ARGS__; \
+    break; \
+} } while(false)
+#endif
 
 inline std::vector<std::tuple<uint32_t, uint32_t>> distribute(
     uint32_t amount, uint32_t size_each, const std::vector<int> &devs) {

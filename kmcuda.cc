@@ -17,8 +17,8 @@
 
 static KMCUDAResult check_args(
     float tolerance, float yinyang_t, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t device, const float *samples, float *centroids,
-    uint32_t *assignments) {
+    uint32_t clusters_size, uint32_t device, bool fp16x2, int verbosity,
+    const float *samples, float *centroids, uint32_t *assignments) {
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
     return kmcudaInvalidArguments;
   }
@@ -45,6 +45,12 @@ static KMCUDAResult check_args(
   if (yinyang_t < 0 || yinyang_t > 0.5) {
     return kmcudaInvalidArguments;
   }
+#if CUDA_ARCH < 60
+  if (fp16x2) {
+    INFO("CUDA device arch %d does not support fp16\n", CUDA_ARCH);
+    return kmcudaInvalidArguments;
+  }
+#endif
   return kmcudaSuccess;
 }
 
@@ -243,7 +249,7 @@ KMCUDAResult kmeans_cuda(
         device, fp16x2, verbosity, samples, centroids, assignments);
   RETERR(check_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
-      device, samples, centroids, assignments));
+      device, fp16x2, verbosity, samples, centroids, assignments));
   INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
   auto devs = setup_devices(device, device_ptrs, verbosity);
   if (devs.empty()) {

@@ -63,7 +63,9 @@ If [numpy](http://www.numpy.org/) headers are not found,
 specify the includes path with defining `NUMPY_INCLUDES`.
 If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
 If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
-(change the path to the actual one).
+(change the path to the actual one). By default, CUDA kernels are compiled for
+the architecture 60 (Pascal). It is possible to override it via `-DCUDA_ARCH=52`,
+but fp16 support will be disabled then.
 
 Python users: if you are using Linux x86-64 and CUDA 8.0, then you can
 install libKMCUDA easily:
