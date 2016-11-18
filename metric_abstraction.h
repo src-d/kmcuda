@@ -51,7 +51,9 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
   FPATTR static typename HALF<F>::type distance(F sqr1, F sqr2, F prod) {
     float fsqr1 = _float(_fin(sqr1)), fsqr2 = _float(_fin(sqr2)),
         fprod = _float(_fin(prod));
-    return _half<F>(acos(fprod / _sqrt(fsqr1 * fsqr2)));
+    float sqr_norm = fsqr1 * fsqr2;
+    assert(sqr_norm > 0);
+    return _half<F>(acos(fprod / _sqrt(sqr_norm)));
   }
 
   FPATTR static float distance(const F *__restrict__ v1, const F *__restrict__ v2) {

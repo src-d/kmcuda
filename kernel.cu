@@ -50,10 +50,11 @@ __global__ void kmeans_plus_plus(
     return;
   }
   samples += static_cast<uint64_t>(sample) * d_features_size;
+  centroids += (cc - 1) * d_features_size;
   extern __shared__ float local_dists[];
   float dist = 0;
   if (_eq(samples[0], samples[0])) {
-    dist = METRIC<M, F>::distance(samples, centroids + (cc - 1) * d_features_size);
+    dist = METRIC<M, F>::distance(samples, centroids);
   }
   float prev_dist = dists[sample];
   if (dist < prev_dist || cc == 1) {
@@ -689,6 +690,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
   size_t dist_sums_size = h_samples_size / BS_KMPP + devs.size();
   std::unique_ptr<float[]> dist_sums(new float[dist_sums_size]);
   memset(dist_sums.get(), 0, dist_sums_size * sizeof(float));
+
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];

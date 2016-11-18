@@ -44,6 +44,11 @@ FPATTR half2 _const(int v) {
 }
 
 template <>
+FPATTR half _const(int v) {
+  return __int2half_rd(v);
+}
+
+template <>
 FPATTR float _const(int v) {
   return v;
 }

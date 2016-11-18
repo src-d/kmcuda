@@ -408,6 +408,30 @@ class KMCUDATests(unittest.TestCase):
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.01)
 
+    def test_fp16_cosine_metric(self):
+        arr = numpy.empty((10000, 2), dtype=numpy.float16)
+        angs = numpy.random.rand(10000) * 2 * numpy.pi
+        for i in range(10000):
+            arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                arr, 4, init="kmeans++", metric="cos", device=1, verbosity=2,
+                seed=3)
+        self.assertEqual(self._get_iters_number(self.stdout), 6)
+        self.assertEqual(len(centroids), 4)
+        for c in centroids:
+            norm = numpy.linalg.norm(c)
+            self.assertTrue(0.9995 < norm < 1.0005)
+        dists = numpy.round(cosine_distances(centroids))
+        self.assertTrue((dists == [
+            [0, 1, 1, 2],
+            [1, 0, 2, 1],
+            [1, 2, 0, 1],
+            [2, 1, 1, 0],
+        ]).all())
+        self.assertEqual(numpy.min(assignments), 0)
+        self.assertEqual(numpy.max(assignments), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
