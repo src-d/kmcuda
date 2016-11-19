@@ -17,8 +17,9 @@ into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations). Yinyang can
 turned off to save GPU memory but the slower Lloyd will be used then.
 Three centroid initialization ways are supported: random, k-means++ and import.
 Two distance metrics are supported: L2 (the usual one) and angular (refined cosine).
-If you've got several GPUs, they can be utilized together and it gives the
-corresponding linear speedup either for Lloyd or Yinyang.
+16-bit float support delivers 2x memory compression. If you've got several GPUs,
+they can be utilized together and it gives the corresponding linear speedup
+either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
 results from Yinyang and Lloyd.
@@ -37,30 +38,38 @@ In such cases, their features are set to NaN.
 
 Angular (cosine) distance metric effectively results in Spherical K-Means behavior.
 The samples **must** be normalized to L2 norm equal to 1 before clustering,
-it is not done automatically.
+it is not done automatically. The actual formula is:
+
+![D(A, B)=\arccos\left(\frac{A\cdot B}{|A||B|}\right)](http://latex2png.com/output//latex_065769cfb5ca039cc4382e1893e94a49.png)
 
 If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
 (all GPU allocation happens at startup).
 
-Data type is 32-bit float. Number of samples is limited by 1^32,
-clusters by 1^32 and features by 1^16. Besides, the product of
+Data type is either 32- or 16-bit float. Number of samples is limited by 1^32,
+clusters by 1^32 and features by 1^16 (1^17 for fp16). Besides, the product of
 clusters number and features number may not exceed 1^32.
+
+In the case of 16-bit floats, the reduced precision often leads to a slightly
+increased number of iterations, Yinyang is especially sensitive to that.
+In some cases, there may be overflows and the clustering may fail completely.
 
 Building
 --------
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
-It requires cudart 7.5 and OpenMP 4.0 capable compiler.
+It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler.
 If [numpy](http://www.numpy.org/) headers are not found,
 specify the includes path with defining `NUMPY_INCLUDES`.
 If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
 If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
-(change the path to the actual one).
+(change the path to the actual one). By default, CUDA kernels are compiled for
+the architecture 60 (Pascal). It is possible to override it via `-DCUDA_ARCH=52`,
+but fp16 support will be disabled then.
 
-Python users: if you are using Linux x86-64 and CUDA 7.5, then you can
-install this easily:
+Python users: if you are using Linux x86-64 and CUDA 8.0, then you can
+install libKMCUDA easily:
 ```
 pip install libKMCUDA
 ```
@@ -75,8 +84,11 @@ Testing
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
 
-Python example
---------------
+Python examples
+---------------
+
+#### L2 (Euclidean) distance
+
 ```python
 import numpy
 from matplotlib import pyplot
@@ -94,7 +106,27 @@ pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
 pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
 ```
 You should see something like this:
-![Clustered dots](cls.png)
+![Clustered dots](cls_euclidean.png)
+
+#### Angular (cosine) distance
+
+```python
+import numpy
+from matplotlib import pyplot
+from libKMCUDA import kmeans_cuda
+
+numpy.random.seed(0)
+arr = numpy.empty((10000, 2), dtype=numpy.float32)
+angs = numpy.random.rand(10000) * 2 * numpy.pi
+for i in range(10000):
+    arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
+centroids, assignments = kmeans_cuda(arr, 4, metric="cos", verbosity=1, seed=3)
+print(centroids)
+pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
+pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
+```
+You should see something like this:
+![Clustered dots](cls_angular.png)
 
 Python API
 ----------
@@ -103,10 +135,11 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
                 yinyang_t=0.1, metric="L2", seed=time(), devices=0, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
-            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features))).
+            or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features\[, fp16x2 marker\]))).
             In the latter case, negative device index means host pointer. Optionally,
             the tuple can be 2 items longer with preallocated device pointers for
-            centroids and assignments. dtype must be float32.
+            centroids and assignments. dtype must be either float16 or
+            convertible to float32.
 
 **clusters** integer, the number of clusters.
 
@@ -134,7 +167,8 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
               
  **return** tuple(centroids, assignments). If **samples** was a numpy array or
             a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
-            (integers) allocated on the same device.
+            (integers) allocated on the same device. If **samples** are float16,
+            the returned centroids are float16 too.
 
 C API
 -----
@@ -142,8 +176,9 @@ C API
 KMCUDAResult kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, uint32_t device, int device_ptrs,
-    int32_t verbosity, const float *samples, float *centroids, uint32_t *assignments)
+    uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
+    int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
+    uint32_t *assignments)
 ```
 **init** specifies the centroids initialization method: k-means++, random or import
          (in the latter case, **centroids** is read).
@@ -158,7 +193,7 @@ KMCUDAResult kmeans_cuda(
 
 **samples_size** number of samples.
 
-**features_size** number of features.
+**features_size** number of features. if fp16x2 is set, one half of the number of features.
 
 **clusters_size** number of clusters.
 
@@ -174,6 +209,10 @@ KMCUDAResult kmeans_cuda(
                 to be a pointer to device #0's memory and the resulting **centroids** and
                 **assignments** are expected to be preallocated on device #0 as well.
                 Usually the value is -1.
+                
+**fp16x2** activates fp16 mode, two half-floats are packed into a single 32-bit float,
+           features_size becomes effectively 2 times bigger, the returned
+           centroids are fp16x2 too.
 
 **verbosity** 0 - no output; 1 - progress output; >=2 - debug output.
 
