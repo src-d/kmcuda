@@ -94,25 +94,54 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
     return _float(distance(_const<F>(1), _const<F>(1), prod));
   }
 
-  FPATTR static void normalize(uint32_t count __attribute__((unused)), F *vec) {
+  FPATTR static void normalize(uint32_t count __attribute__((unused)), float *vec) {
     // Kahan summation with inverted c
-    F norm = _const<F>(0);
-    F corr = _const<F>(0);
+    float norm = 0, corr = 0;
     #pragma unroll 4
     for (int f = 0; f < d_features_size; f++) {
-      F v = vec[f];
-      F y = _fma(corr, v, v);
-      F t = _add(norm, y);
-      corr = _sub(y, _sub(t, norm));
+      float v = vec[f];
+      float y = _fma(corr, v, v);
+      float t = norm + y;
+      corr = y - (t - norm);
       norm = t;
     }
+    norm = _reciprocal(_sqrt(norm));
 
-    norm = _fout(_reciprocal(_sqrt(_fin(norm))));
     #pragma unroll 4
     for (int f = 0; f < d_features_size; f++) {
-      vec[f] = _mul(vec[f], norm);
+      vec[f] = vec[f] * norm;
     }
   }
+
+  #if CUDA_ARCH >= 60
+  FPATTR static void normalize(uint32_t count __attribute__((unused)), half2 *vec) {
+    // We really have to calculate norm in 32-bit floats because the maximum
+    // value which 16-bit float may represent is 2^16.
+    float norm = 0, corr = 0;
+    #pragma unroll 4
+    for (int f = 0; f < d_features_size; f++) {
+      half2 v = vec[f];
+      float v1 = _float(__high2half(v));
+      float v2 = _float(__low2half(v));
+
+      float y = _fma(corr, v1, v1);
+      float t = norm + y;
+      corr = y - (t - norm);
+      norm = t;
+
+      y = _fma(corr, v2, v2);
+      t = norm + y;
+      corr = y - (t - norm);
+      norm = t;
+    }
+    norm = _reciprocal(_sqrt(norm));
+    half2 norm2 = _fout(_half<half2>(norm));
+    #pragma unroll 4
+    for (int f = 0; f < d_features_size; f++) {
+      vec[f] = _mul(vec[f], norm2);
+    }
+  }
+  #endif
 };
 
 #endif //KMCUDA_METRIC_ABSTRACTION_H
