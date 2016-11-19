@@ -41,6 +41,8 @@ extern "C" {
 ///               #0 and #1. n-th bit corresponds to n-th device.
 /// @param device_ptrs If negative, input and output pointers are taken from host;
 ///                    otherwise, device number where to load and store data.
+/// @param fp16x2 If true, the input is treated as half2 instead of float. In that case,
+///               features_size must be 2 times smaller than the real size.
 /// @param verbosity 0 - no output; 1 - progress output; >=2 - debug output.
 /// @param samples input array of size samples_size x features_size in row major format.
 /// @param centroids output array of centroids of size clusters_size x features_size
@@ -51,8 +53,9 @@ extern "C" {
 KMCUDAResult kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t seed, uint32_t device, int device_ptrs,
-    int32_t verbosity, const float *samples, float *centroids, uint32_t *assignments);
+    uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
+    int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
+    uint32_t *assignments);
 
 }  // extern "C"
 

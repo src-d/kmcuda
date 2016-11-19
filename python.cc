@@ -39,19 +39,28 @@ PyMODINIT_FUNC PyInit_libKMCUDA(void) {
   }
   // numpy
   import_array();
+  PyObject_SetAttrString(m, "supports_fp16", CUDA_ARCH >= 60? Py_True : Py_False);
   return m;
 }
 }
 
-using pyobj_parent = std::unique_ptr<PyObject, std::function<void(PyObject*)>>;
+template <typename O>
+using pyobj_parent = std::unique_ptr<O, std::function<void(O*)>>;
 
-class pyobj : public pyobj_parent {
+template <typename O>
+class _pyobj : public pyobj_parent<O> {
  public:
-  pyobj() : pyobj_parent(
-      nullptr, [](PyObject *p){ if (p) Py_DECREF(p); }) {}
-  explicit pyobj(PyObject *ptr) : pyobj_parent(
-      ptr, [](PyObject *p){ if(p) Py_DECREF(p); }) {}
+  _pyobj() : pyobj_parent<O>(
+      nullptr, [](O *p){ if (p) Py_DECREF(p); }) {}
+  explicit _pyobj(PyObject *ptr) : pyobj_parent<O>(
+      reinterpret_cast<O *>(ptr), [](O *p){ if(p) Py_DECREF(p); }) {}
+  void reset(PyObject *p) noexcept {
+    pyobj_parent<O>::reset(reinterpret_cast<O*>(p));
+  }
 };
+
+using pyobj = _pyobj<PyObject>;
+using pyarray = _pyobj<PyArrayObject>;
 
 static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"kmeans++", kmcudaInitMethodPlusPlus},
@@ -82,6 +91,7 @@ static void set_cuda_memcpy_error() {
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
   int32_t verbosity = 0;
+  bool fp16x2 = false;
   float tolerance = .01, yinyang_t = .1;
   PyObject *samples_obj, *init_obj = Py_None, *metric_obj = Py_None;
   static const char *kwlist[] = {
@@ -146,7 +156,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   uint32_t *assignments = nullptr;
   uint32_t samples_size = 0, features_size = 0;
   int device_ptrs = -1;
-  pyobj samples_array;
+  pyarray samples_array;
   if (PyTuple_Check(samples_obj)) {
     auto size = PyTuple_GET_SIZE(samples_obj);
     if (size != 3 && size != 5) {
@@ -174,6 +184,9 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     }
     samples_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 0));
     features_size = PyLong_AsUnsignedLong(PyTuple_GetItem(member3, 1));
+    if (PyTuple_Size(member3) == 3) {
+      fp16x2 = PyObject_IsTrue(PyTuple_GetItem(member3, 2));
+    }
     if (size == 5) {
       auto member4 = PyTuple_GetItem(samples_obj, 3),
            member5 = PyTuple_GetItem(samples_obj, 4);
@@ -187,19 +200,36 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
           PyLong_AsUnsignedLongLong(member5)));
     }
   } else {
-    samples_array.reset(PyArray_FROM_OTF(samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+    samples_array.reset(PyArray_FROM_OTF(
+        samples_obj, NPY_FLOAT16, NPY_ARRAY_IN_ARRAY));
     if (!samples_array) {
-      PyErr_SetString(PyExc_TypeError, "\"samples\" must be a 2D numpy array");
-      return NULL;
+      PyErr_Clear();
+      samples_array.reset(PyArray_FROM_OTF(
+          samples_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
+      if (!samples_array) {
+        PyErr_SetString(PyExc_TypeError,
+                        "\"samples\" must be a 2D float32 or float16 numpy array");
+        return NULL;
+      }
+    } else {
+      fp16x2 = true;
     }
-    auto ndims = PyArray_NDIM(reinterpret_cast<PyArrayObject *>(samples_array.get()));
+    auto ndims = PyArray_NDIM(samples_array.get());
     if (ndims != 2) {
       PyErr_SetString(PyExc_ValueError, "\"samples\" must be a 2D numpy array");
       return NULL;
     }
-    auto dims = PyArray_DIMS(reinterpret_cast<PyArrayObject *>(samples_array.get()));
+    auto dims = PyArray_DIMS(samples_array.get());
     samples_size = static_cast<uint32_t>(dims[0]);
     features_size = static_cast<uint32_t>(dims[1]);
+    if (fp16x2 && PyArray_TYPE(samples_array.get()) == NPY_FLOAT16) {
+      if (features_size % 2 != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "the number of features must be even in fp16 mode");
+        return NULL;
+      }
+      features_size /= 2;
+    }
     if (features_size > UINT16_MAX) {
       char msg[128];
       sprintf(msg, "\"samples\": more than %" PRIu32 " features is not supported",
@@ -208,18 +238,20 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       return NULL;
     }
     samples = reinterpret_cast<float *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(samples_array.get())));
+        samples_array.get()));
   }
-  pyobj centroids_array, assignments_array;
+  pyarray centroids_array, assignments_array;
   if (device_ptrs < 0) {
-    npy_intp centroid_dims[] = {clusters_size, features_size, 0};
-    centroids_array.reset(PyArray_EMPTY(2, centroid_dims, NPY_FLOAT32, false));
+    npy_intp centroid_dims[] = {
+        clusters_size, fp16x2? features_size * 2 : features_size, 0};
+    centroids_array.reset(PyArray_EMPTY(
+        2, centroid_dims, fp16x2? NPY_FLOAT16 : NPY_FLOAT32, false));
     centroids = reinterpret_cast<float *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(centroids_array.get())));
+        centroids_array.get()));
     npy_intp assignments_dims[] = {samples_size, 0};
     assignments_array.reset(PyArray_EMPTY(1, assignments_dims, NPY_UINT32, false));
     assignments = reinterpret_cast<uint32_t *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(assignments_array.get())));
+        assignments_array.get()));
   } else if (centroids == nullptr) {
     if (cudaSetDevice(device_ptrs) != cudaSuccess) {
       set_cuda_device_error();
@@ -237,20 +269,18 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     }
   }
   if (init == kmcudaInitMethodImport) {
-    pyobj import_centroids_array(PyArray_FROM_OTF(
+    pyarray import_centroids_array(PyArray_FROM_OTF(
         init_obj, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY));
     if (import_centroids_array == NULL) {
       PyErr_SetString(PyExc_TypeError, "\"init\" centroids must be a 2D numpy array");
       return NULL;
     }
-    auto ndims = PyArray_NDIM(reinterpret_cast<PyArrayObject *>(
-        import_centroids_array.get()));
+    auto ndims = PyArray_NDIM(import_centroids_array.get());
     if (ndims != 2) {
       PyErr_SetString(PyExc_ValueError, "\"init\" centroids must be a 2D numpy array");
       return NULL;
     }
-    auto dims = PyArray_DIMS(reinterpret_cast<PyArrayObject *>(
-        import_centroids_array.get()));
+    auto dims = PyArray_DIMS(import_centroids_array.get());
     if (static_cast<uint32_t>(dims[0]) != clusters_size) {
       PyErr_SetString(PyExc_ValueError,
                       "\"init\" centroids shape[0] does not match "
@@ -264,7 +294,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       return NULL;
     }
     auto icd = reinterpret_cast<float *>(PyArray_DATA(
-        reinterpret_cast<PyArrayObject *>(import_centroids_array.get())));
+        import_centroids_array.get()));
     auto size = clusters_size * features_size * sizeof(float);
     if (device_ptrs < 0) {
       memcpy(centroids, icd, size);
@@ -284,7 +314,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   result = kmeans_cuda(
       init, tolerance, yinyang_t, metric, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      device_ptrs, verbosity, samples, centroids, assignments);
+      device_ptrs, fp16x2, verbosity, samples, centroids, assignments);
   Py_END_ALLOW_THREADS
 
   switch (result) {
