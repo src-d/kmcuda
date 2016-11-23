@@ -46,7 +46,7 @@ class BinaryDistribution(Distribution):
 setup(
     name="libKMCUDA",
     description="Accelerated K-means on GPU",
-    version="4.0.0",
+    version="4.0.1",
     license="MIT",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",

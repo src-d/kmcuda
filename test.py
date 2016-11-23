@@ -360,6 +360,15 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
 
+    def test_256_features(self):
+        arr = numpy.random.rand(1000, 256).astype(numpy.float32)
+        arr /= numpy.linalg.norm(arr, axis=1)[:, None]
+        with self.stdout:
+            kmeans_cuda(
+                arr, 10, init="kmeans++", metric="cos", device=0, verbosity=2,
+                yinyang_t=0.1, seed=3)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
+
     @unittest.skipUnless(supports_fp16,
                          "16-bit floats are not supported by this CUDA arch")
     def test_fp16_random_lloyd(self):

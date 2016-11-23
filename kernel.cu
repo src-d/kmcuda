@@ -716,8 +716,9 @@ KMCUDAResult kmeans_cuda_lloyd(
         std::tie(offset, length) = plans[devi];
         dim3 sgrid(length / sblock.x + 1, 1, 1);
         int shmem_size = shmem_sizes[devi];
-        if (shmem_size - sblock.x * h_features_size * sizeof(float) >=
-            (h_features_size + 1) * sizeof(float)) {
+        int64_t ssqrmem = sblock.x * h_features_size * sizeof(float);
+        if (shmem_size > ssqrmem && shmem_size - ssqrmem >=
+            static_cast<int>((h_features_size + 1) * sizeof(float))) {
           KERNEL_SWITCH(kmeans_assign_lloyd_smallc, <<<sgrid, sblock, shmem_size>>>(
               length,
               reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
