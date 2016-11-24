@@ -56,8 +56,8 @@ __global__ void kmeans_plus_plus(
   if (_eq(samples[0], samples[0])) {
     dist = METRIC<M, F>::distance(samples, centroids);
   }
-  float prev_dist = dists[sample];
-  if (dist < prev_dist || cc == 1) {
+  float prev_dist;
+  if (cc == 1 || dist < (prev_dist = dists[sample])) {
     dists[sample] = dist;
   } else {
     dist = prev_dist;
