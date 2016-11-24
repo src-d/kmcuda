@@ -200,7 +200,10 @@ KMCUDAResult kmeans_init_centroids(
             samples_size, features_size, i, metric, devs, fp16x2, verbosity,
             samples, centroids, dists, dev_sums, host_dists.get(), &dist_sum),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
-        assert(dist_sum == dist_sum);
+        if (dist_sum != dist_sum) {
+          assert(dist_sum == dist_sum);
+          INFO("internal bug inside kmeans_init_centroids: dist_sum is NaN\n");
+        }
         double choice = ((rand() + .0) / RAND_MAX);
         uint32_t choice_approx = choice * samples_size;
         double choice_sum = choice * dist_sum;
@@ -227,7 +230,10 @@ KMCUDAResult kmeans_init_centroids(
             j++;
           }
         }
-        assert(j > 0);
+        if (j == 0 || j > samples_size) {
+          assert(j > 0 && j <= samples_size);
+          INFO("internal bug in kmeans_init_centroids: j = %" PRIu32 "\n", j);
+        }
         CUMEMCPY_D2D_ASYNC(*centroids, i * features_size, samples,
                            (j - 1) * features_size, features_size);
       }
@@ -314,7 +320,8 @@ KMCUDAResult kmeans_cuda(
     max_length = std::max(max_length, clusters_size + yy_groups_size);
     CUMALLOC(device_passed_yy, max_length);
     size_t yyc_size = yy_groups_size * features_size;
-    if (yyc_size + (clusters_size + yy_groups_size) <= max_length) {
+    if (yyc_size <= max_length) {
+      DEBUG("reusing passed_yy for centroids_yy\n");
       for (auto &p : device_passed_yy) {
         device_centroids_yy.emplace_back(
             reinterpret_cast<float*>(p.get()), true);
