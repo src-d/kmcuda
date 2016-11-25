@@ -7,6 +7,7 @@
 
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
+#define TRACE(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
 
 #define CUERRSTR() cudaGetErrorString(cudaGetLastError())
 
@@ -87,23 +88,23 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
   FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaMemoryCopyError)); \
 } while(false)
 
-#define CUMALLOC_ONEN(dest, size, name) do { \
+#define CUMALLOC_ONEN(dest, size, name, dev) do { \
   void *__ptr; \
-  CUCH(cudaMalloc( \
-      &__ptr, \
-      (size) * sizeof(std::remove_reference<decltype(dest)>::type::value_type \
-          ::element_type)), \
-       kmcudaMemoryAllocationFailure, \
+  size_t __size = (size) * \
+      sizeof(std::remove_reference<decltype(dest)>::type::value_type::element_type); \
+  CUCH(cudaMalloc(&__ptr, __size), kmcudaMemoryAllocationFailure, \
        INFO("failed to allocate %zu bytes for " name "\n", \
             static_cast<size_t>(size))); \
   (dest).emplace_back(reinterpret_cast<std::remove_reference<decltype(dest)> \
       ::type::value_type::element_type *>(__ptr)); \
+  TRACE("[%d] " name ": %p - %p (%zu)\n", dev, __ptr, \
+        reinterpret_cast<char *>(__ptr) + __size, __size); \
 } while(false)
 
-#define CUMALLOC_ONE(dest, size) CUMALLOC_ONEN(dest, size, #dest)
+#define CUMALLOC_ONE(dest, size, dev) CUMALLOC_ONEN(dest, size, #dest, dev)
 
 #define CUMALLOCN(dest, size, name) do { \
-  FOR_EACH_DEV(CUMALLOC_ONEN(dest, size, name)); \
+  FOR_EACH_DEV(CUMALLOC_ONEN(dest, size, name, dev)); \
 } while(false)
 
 #define CUMALLOC(dest, size) CUMALLOCN(dest, size, #dest)

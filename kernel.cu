@@ -56,8 +56,8 @@ __global__ void kmeans_plus_plus(
   if (_eq(samples[0], samples[0])) {
     dist = METRIC<M, F>::distance(samples, centroids);
   }
-  float prev_dist = dists[sample];
-  if (dist < prev_dist || cc == 1) {
+  float prev_dist;
+  if (cc == 1 || dist < (prev_dist = dists[sample])) {
     dists[sample] = dist;
   } else {
     dist = prev_dist;
@@ -575,7 +575,8 @@ static int check_changed(int iter, float tolerance, uint32_t h_samples_size,
 static KMCUDAResult prepare_mem(
     uint32_t h_samples_size, uint32_t h_clusters_size, bool resume,
     const std::vector<int> &devs, int verbosity, udevptrs<uint32_t> *ccounts,
-    udevptrs<uint32_t> *assignments, std::vector<uint32_t> *shmem_sizes) {
+    udevptrs<uint32_t> *assignments, udevptrs<uint32_t> *assignments_prev,
+    std::vector<uint32_t> *shmem_sizes) {
   uint32_t zero = 0;
   shmem_sizes->clear();
   FOR_EACH_DEVI(
@@ -590,6 +591,9 @@ static KMCUDAResult prepare_mem(
                            h_clusters_size * sizeof(uint32_t)),
            kmcudaRuntimeError);
       CUCH(cudaMemsetAsync((*assignments)[devi].get(), 0xff,
+                           h_samples_size * sizeof(uint32_t)),
+           kmcudaRuntimeError);
+      CUCH(cudaMemsetAsync((*assignments_prev)[devi].get(), 0xff,
                            h_samples_size * sizeof(uint32_t)),
            kmcudaRuntimeError);
     }
@@ -700,7 +704,7 @@ KMCUDAResult kmeans_cuda_lloyd(
     udevptrs<uint32_t> *assignments, int *iterations = nullptr) {
   std::vector<uint32_t> shmem_sizes;
   RETERR(prepare_mem(h_samples_size, h_clusters_size, resume, devs, verbosity,
-                     ccounts, assignments, &shmem_sizes));
+                     ccounts, assignments, assignments_prev, &shmem_sizes));
   auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   auto planc = distribute(h_clusters_size, h_features_size * sizeof(float), devs);
   if (verbosity > 1) {
@@ -844,7 +848,7 @@ KMCUDAResult kmeans_cuda_yy(
   );
   std::vector<uint32_t> shmem_sizes;
   RETERR(prepare_mem(h_samples_size, h_clusters_size, true, devs, verbosity,
-                     ccounts, assignments, &shmem_sizes));
+                     ccounts, assignments, assignments_prev, &shmem_sizes));
   dim3 siblock(BS_YY_INI, 1, 1);
   dim3 sgblock(BS_YY_GFL, 1, 1);
   dim3 slblock(BS_YY_LFL, 1, 1);

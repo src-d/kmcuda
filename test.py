@@ -180,7 +180,7 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 self.samples, 50, init="random", device=1,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
-        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
         self.assertEqual(sys.getrefcount(centroids), 2)
         self.assertEqual(sys.getrefcount(assignments), 2)
         self.assertEqual(sys.getrefcount(self.samples), 2)
@@ -213,7 +213,7 @@ class KMCUDATests(unittest.TestCase):
                 self.samples, 50, init=centroids, device=1,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
         # one is 2nd stage init
-        self.assertEqual(self._get_iters_number(self.stdout), 10)
+        self.assertEqual(self._get_iters_number(self.stdout), 8)
         self._validate(centroids, assignments, 0.05)
 
     def test_random_lloyd_2gpus(self):
@@ -221,7 +221,7 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 self.samples, 50, init="random", device=3,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
-        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
         self.assertEqual(centroids.shape, (50, 2))
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
@@ -247,7 +247,7 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 self.samples, 50, init="random", device=0,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
-        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
         self.assertEqual(centroids.shape, (50, 2))
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
@@ -259,7 +259,7 @@ class KMCUDATests(unittest.TestCase):
             centroids, assignments = kmeans_cuda(
                 hostptr, 50, init="random", device=0,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
-        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
         self.assertEqual(centroids.shape, (50, 2))
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
@@ -275,7 +275,7 @@ class KMCUDATests(unittest.TestCase):
         cuda.api.wrap(cdevptr, 0)
         cuda.api.wrap(adevptr, 0)
         try:
-            self.assertEqual(self._get_iters_number(self.stdout), 9)
+            self.assertEqual(self._get_iters_number(self.stdout), 7)
             self.assertIsInstance(cdevptr, int)
             self.assertIsInstance(adevptr, int)
             centroids = cuda.api.copy_to_host(
@@ -299,7 +299,7 @@ class KMCUDATests(unittest.TestCase):
         cuda.api.wrap(cdevptr, 0)
         cuda.api.wrap(adevptr, 0)
         try:
-            self.assertEqual(self._get_iters_number(self.stdout), 9)
+            self.assertEqual(self._get_iters_number(self.stdout), 7)
             self.assertIsInstance(cdevptr, int)
             self.assertIsInstance(adevptr, int)
             centroids = cuda.api.copy_to_host(
@@ -323,7 +323,7 @@ class KMCUDATests(unittest.TestCase):
         cuda.api.wrap(cdevptr, 0)
         cuda.api.wrap(adevptr, 0)
         try:
-            self.assertEqual(self._get_iters_number(self.stdout), 9)
+            self.assertEqual(self._get_iters_number(self.stdout), 7)
             self.assertIsInstance(cdevptr, int)
             self.assertIsInstance(adevptr, int)
             centroids = cuda.api.copy_to_host(
@@ -365,9 +365,9 @@ class KMCUDATests(unittest.TestCase):
         arr /= numpy.linalg.norm(arr, axis=1)[:, None]
         with self.stdout:
             kmeans_cuda(
-                arr, 10, init="kmeans++", metric="cos", device=0, verbosity=2,
+                arr, 10, init="kmeans++", metric="cos", device=0, verbosity=3,
                 yinyang_t=0.1, seed=3)
-        self.assertEqual(self._get_iters_number(self.stdout), 7)
+        self.assertEqual(self._get_iters_number(self.stdout), 9)
 
     @unittest.skipUnless(supports_fp16,
                          "16-bit floats are not supported by this CUDA arch")
@@ -379,7 +379,7 @@ class KMCUDATests(unittest.TestCase):
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
         self.assertEqual(centroids.dtype, numpy.float16)
         centroids = centroids.astype(numpy.float32)
-        self.assertEqual(self._get_iters_number(self.stdout), 9)
+        self.assertEqual(self._get_iters_number(self.stdout), 7)
         self.assertEqual(sys.getrefcount(centroids), 2)
         self.assertEqual(sys.getrefcount(assignments), 2)
         self.assertEqual(sys.getrefcount(self.samples), 2)
