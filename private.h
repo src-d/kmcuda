@@ -7,7 +7,7 @@
 
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
-#define TRACE(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
+#define TRACE(...) do { if (verbosity > 2) { printf(__VA_ARGS__); } } while (false)
 
 #define CUERRSTR() cudaGetErrorString(cudaGetLastError())
 
