@@ -367,7 +367,7 @@ class KMCUDATests(unittest.TestCase):
             kmeans_cuda(
                 arr, 10, init="kmeans++", metric="cos", device=0, verbosity=3,
                 yinyang_t=0.1, seed=3)
-        self.assertEqual(self._get_iters_number(self.stdout), 7)
+        self.assertEqual(self._get_iters_number(self.stdout), 9)
 
     @unittest.skipUnless(supports_fp16,
                          "16-bit floats are not supported by this CUDA arch")
