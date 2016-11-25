@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cassert>
+#include <algorithm>
 #include <memory>
 
 #include <cuda_runtime_api.h>
@@ -160,23 +161,26 @@ KMCUDAResult kmeans_init_centroids(
         );
       }
       break;
-    case kmcudaInitMethodRandom:
+    case kmcudaInitMethodRandom: {
       INFO("randomly picking initial centroids...\n");
-      for (uint32_t c = 0; c < clusters_size; c++) {
-        auto rnd = rand() % samples_size;
-        if ((c + 1) % 1000 == 0 || c == clusters_size - 1) {
-          INFO("\rcentroid #%" PRIu32, c + 1);
-          fflush(stdout);
-          CUMEMCPY_D2D(
-              *centroids, c * features_size, samples,
-              rnd * features_size, features_size);
-        } else {
-          CUMEMCPY_D2D_ASYNC(
-              *centroids, c * features_size, samples,
-              rnd * features_size, features_size);
-        }
+      std::vector<uint32_t> chosen(samples_size);
+      #pragma omp parallel for
+      for (uint32_t s = 0; s < samples_size; s++) {
+        chosen[s] = s;
       }
+      std::random_shuffle(chosen.begin(), chosen.end());
+      DEBUG("shuffle complete, copying to device(s)\n");
+      FOR_EACH_DEVI(
+        for (uint32_t c = 0; c < clusters_size; c++) {
+          CUCH(cudaMemcpyAsync(
+              (*centroids)[devi].get() + c * features_size,
+              samples[devi].get() + static_cast<int64_t>(chosen[c]) * features_size,
+              features_size * sizeof(float),
+              cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
+        }
+      );
       break;
+    }
     case kmcudaInitMethodPlusPlus:
       INFO("performing kmeans++...\n");
       float smoke = NAN;
@@ -189,6 +193,15 @@ KMCUDAResult kmeans_init_centroids(
       }
       CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
       std::unique_ptr<float[]> host_dists(new float[samples_size]);
+      if (verbosity > 2) {
+        printf("kmeans++: dump %" PRIu32 " %" PRIu32 " %p\n",
+               samples_size, features_size, host_dists.get());
+        FOR_EACH_DEVI(
+          printf("kmeans++: dev #%d: %p %p %p %p\n", devs[devi],
+                 samples[devi].get(), (*centroids)[devi].get(),
+                 (*dists)[devi].get(), (*dev_sums)[devi].get());
+        );
+      }
       for (uint32_t i = 1; i < clusters_size; i++) {
         if (verbosity > 1 || (verbosity > 0 && (
               clusters_size < 100 || i % (clusters_size / 100) == 0))) {
@@ -257,6 +270,8 @@ KMCUDAResult kmeans_cuda(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
       device, fp16x2, verbosity, samples, centroids, assignments));
   INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
+  uint32_t yy_groups_size = yinyang_t * clusters_size;
+  DEBUG("yinyang groups: %" PRIu32 "\n", yy_groups_size);
   auto devs = setup_devices(device, device_ptrs, verbosity);
   if (devs.empty()) {
     return kmcudaNoSuchDevice;
@@ -269,7 +284,7 @@ KMCUDAResult kmeans_cuda(
       device_samples.emplace_back(const_cast<float*>(samples), true);
       origin_devi = devi;
     } else {
-      CUMALLOC_ONE(device_samples, device_samples_size);
+      CUMALLOC_ONE(device_samples, device_samples_size, devs[devi]);
     }
   );
   if (device_ptrs < 0) {
@@ -290,7 +305,7 @@ KMCUDAResult kmeans_cuda(
     if (dev == device_ptrs) {
       device_centroids.emplace_back(centroids, true);
     } else {
-      CUMALLOC_ONE(device_centroids, centroids_size);
+      CUMALLOC_ONE(device_centroids, centroids_size, dev);
     }
   );
   udevptrs<uint32_t> device_assignments;
@@ -298,7 +313,7 @@ KMCUDAResult kmeans_cuda(
     if (dev == device_ptrs) {
       device_assignments.emplace_back(assignments, true);
     } else {
-      CUMALLOC_ONE(device_assignments, samples_size);
+      CUMALLOC_ONE(device_assignments, samples_size, dev);
     }
   );
   udevptrs<uint32_t> device_assignments_prev;
@@ -306,8 +321,6 @@ KMCUDAResult kmeans_cuda(
   udevptrs<uint32_t> device_ccounts;
   CUMALLOC(device_ccounts, clusters_size);
 
-  uint32_t yy_groups_size = yinyang_t * clusters_size;
-  DEBUG("yinyang groups: %" PRIu32 "\n", yy_groups_size);
   udevptrs<uint32_t> device_assignments_yy, device_passed_yy;
   udevptrs<float> device_bounds_yy, device_drifts_yy, device_centroids_yy;
   if (yy_groups_size >= 1) {
