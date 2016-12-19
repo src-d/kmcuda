@@ -132,7 +132,7 @@ Python API
 ----------
 ```python
 def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
-                yinyang_t=0.1, metric="L2", seed=time(), devices=0, verbosity=0)
+                yinyang_t=0.1, metric="L2", seed=time(), device=1, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
             or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features\[, fp16x2 marker\]))).
@@ -158,9 +158,9 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 
 **seed** integer, random generator seed for reproducible results.
 
-**devices** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
            3 means using first and second device. Special value 0 enables all available devices.
-           Default value is 0.
+           Default value is 1.
 
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
               2 means lots of output.
