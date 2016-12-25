@@ -89,7 +89,7 @@ static void set_cuda_memcpy_error() {
 }
 
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
-  uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 1;
+  uint32_t clusters_size = 0, seed = static_cast<uint32_t>(time(NULL)), device = 0;
   int32_t verbosity = 0;
   bool fp16x2 = false;
   float tolerance = .01, yinyang_t = .1;
