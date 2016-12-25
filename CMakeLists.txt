@@ -11,7 +11,7 @@ if (PROFILE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 #set(CMAKE_VERBOSE_MAKEFILE on)
 if (NOT DEFINED CUDA_ARCH)
-  set(CUDA_ARCH "60")
+  set(CUDA_ARCH "61")
 endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -Wall -Werror -DCUDA_ARCH=${CUDA_ARCH} -std=c++11 ${OpenMP_CXX_FLAGS}")
 set(SOURCE_FILES kmcuda.cc kmcuda.h wrappers.h private.h fp_abstraction.h
