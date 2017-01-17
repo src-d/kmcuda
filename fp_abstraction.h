@@ -5,6 +5,8 @@
 #ifndef KMCUDA_FP_ABSTRACTION_H
 #define KMCUDA_FP_ABSTRACTION_H
 
+#include <cfloat>
+
 #if CUDA_ARCH >= 60
 #include <cuda_fp16.h>
 #endif

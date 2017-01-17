@@ -1,12 +1,14 @@
 import os
+import pickle
 import sys
 import tempfile
 import unittest
 
 import numpy
-from libKMCUDA import kmeans_cuda, supports_fp16
+from libKMCUDA import kmeans_cuda, knn_cuda, supports_fp16
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_distances
+from sklearn.neighbors import NearestNeighbors
 
 
 class CUDA_cuda4py(object):
@@ -143,7 +145,7 @@ class StdoutListener(object):
         return self._stdout
 
 
-class KMCUDATests(unittest.TestCase):
+class KmeansTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         numpy.random.seed(0)
@@ -158,7 +160,7 @@ class KMCUDATests(unittest.TestCase):
         cls.stdout = StdoutListener()
 
     def setUp(self):
-        super(KMCUDATests, self).setUp()
+        super(KmeansTests, self).setUp()
         numpy.random.seed(0)
 
     @staticmethod
@@ -174,6 +176,24 @@ class KMCUDATests(unittest.TestCase):
     @staticmethod
     def _get_iters_number(stdout):
         return sum(1 for l in str(stdout).split("\n") if l.startswith("iteration"))
+
+    def test_crap(self):
+        with self.assertRaises(TypeError):
+            kmeans_cuda(
+                self.samples, "bullshit", init="random", device=1,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        with self.assertRaises(ValueError):
+            kmeans_cuda(
+                self.samples, 50, init="bullshit", device=1,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        with self.assertRaises(ValueError):
+            kmeans_cuda(
+                self.samples, 50, init="random", device=1,
+                tolerance=100, yinyang_t=0)
+        with self.assertRaises(ValueError):
+            kmeans_cuda(
+                self.samples, 50, init="random", device=1,
+                yinyang_t=10)
 
     def test_random_lloyd(self):
         with self.stdout:
@@ -263,6 +283,14 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(centroids.shape, (50, 2))
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
+        with self.assertRaises(ValueError):
+            kmeans_cuda(
+                ("bullshit", -1, self.samples.shape), 50, init="random",
+                device=0, verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        with self.assertRaises(TypeError):
+            kmeans_cuda(
+                "bullshit", 50, init="random",
+                device=0, verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
 
     def test_random_lloyd_same_device_ptr(self):
         cuda = CUDA()
@@ -451,6 +479,113 @@ class KMCUDATests(unittest.TestCase):
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
 
+
+class KnnTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        numpy.random.seed(0)
+        arr = numpy.empty((13000, 2), dtype=numpy.float32)
+        arr[:2000] = numpy.random.rand(2000, 2) + [0, 0.5]
+        arr[2000:4000] = numpy.random.rand(2000, 2) + [0, 1.5]
+        arr[4000:6000] = numpy.random.rand(2000, 2) - [0, 0.5]
+        arr[6000:8000] = numpy.random.rand(2000, 2) + [0.5, 0]
+        arr[8000:10000] = numpy.random.rand(2000, 2) - [0.5, 0]
+        arr[10000:] = numpy.random.rand(3000, 2) * 5 - [2, 2]
+        cls.samples = arr
+        cls.stdout = StdoutListener()
+
+    def setUp(self):
+        super(KnnTests, self).setUp()
+        numpy.random.seed(0)
+
+    def _test_small(self, k, dev):
+        ca = kmeans_cuda(self.samples, 50, seed=777, verbosity=1)
+        nb = knn_cuda(k, self.samples, *ca, verbosity=2, device=dev)
+        bn = NearestNeighbors(n_neighbors=k).fit(self.samples).kneighbors()[1]
+        print("diff: %d" % (nb != bn).sum())
+        self.assertTrue((nb == bn).all())
+
+    def test_single_dev(self):
+        self._test_small(10, 1)
+
+    def test_many_single_dev(self):
+        self._test_small(50, 1)
+
+    def test_multiple_dev(self):
+        self._test_small(10, 0)
+
+    def test_many_multiple_devs(self):
+        self._test_small(50, 0)
+
+    def test_hostptr(self):
+        cents, asses = kmeans_cuda(self.samples, 50, seed=777, verbosity=1)
+        samples_ptr = self.samples.__array_interface__["data"][0]
+        centroids_ptr = cents.__array_interface__["data"][0]
+        asses_ptr = asses.__array_interface__["data"][0]
+        nb = knn_cuda(10, (samples_ptr, -1, self.samples.shape),
+                      (centroids_ptr, len(cents)), asses_ptr, verbosity=2)
+        bn = NearestNeighbors(n_neighbors=10).fit(self.samples).kneighbors()[1]
+        print("diff: %d" % (nb != bn).sum())
+        self.assertTrue((nb == bn).all())
+        with self.assertRaises(ValueError):
+            knn_cuda(10, ("bullshit", -1, self.samples.shape),
+                     (centroids_ptr, len(cents)), asses_ptr, verbosity=2)
+        with self.assertRaises(TypeError):
+            knn_cuda(10, "bullshit",
+                     (centroids_ptr, len(cents)), asses_ptr, verbosity=2)
+        with self.assertRaises(ValueError):
+            knn_cuda(10, ("samples_ptr", -1, self.samples.shape),
+                     ("bullshit", len(cents)), asses_ptr, verbosity=2)
+        with self.assertRaises(ValueError):
+            knn_cuda(10, ("samples_ptr", -1, self.samples.shape),
+                     "bullshit", asses_ptr, verbosity=2)
+        with self.assertRaises(ValueError):
+            knn_cuda(10, ("samples_ptr", -1, self.samples.shape),
+                     (centroids_ptr, len(cents)), "bullshit", verbosity=2)
+
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
+    def test_fp16(self):
+        samples = self.samples.astype(numpy.float16)
+        ca = kmeans_cuda(samples, 50, seed=777, verbosity=1)
+        nb = knn_cuda(10, samples, *ca, verbosity=2, device=1)
+        bn = NearestNeighbors(n_neighbors=10).fit(samples).kneighbors()[1]
+        print("diff: %d" % (nb != bn).sum())
+        self.assertTrue((nb != bn).sum() < 500)
+
+    def _test_large(self, k, dev):
+        cache = "/tmp/kmcuda_knn_cache_large.pickle"
+        samples = numpy.random.rand(50000, 128).astype(numpy.float32)
+        try:
+            with open(cache, "rb") as fin:
+                ca = pickle.load(fin)
+        except:
+            ca = kmeans_cuda(samples, 1000, seed=777, verbosity=1)
+            with open(cache, "wb") as fout:
+                pickle.dump(ca, fout, protocol=-1)
+        print("nan: %s" % numpy.nonzero(ca[0][:, 0] != ca[0][:, 0])[0])
+        nb = knn_cuda(k, samples, *ca, verbosity=2, device=dev)
+        for i, sn in enumerate(nb):
+            for j in range(len(sn) - 1):
+                self.assertLessEqual(
+                    numpy.linalg.norm(samples[i] - samples[sn[j]]),
+                    numpy.linalg.norm(samples[i] - samples[sn[j + 1]]))
+            mdist = numpy.linalg.norm(samples[i] - samples[sn[-1]])
+            for r in numpy.random.randint(0, high=len(samples), size=100):
+                self.assertLessEqual(
+                    mdist, numpy.linalg.norm(samples[i] - samples[r]))
+
+    def test_large_single_dev(self):
+        self._test_large(10, 1)
+
+    def test_many_large_single_dev(self):
+        self._test_large(50, 1)
+
+    def test_large_multiple_dev(self):
+        self._test_large(10, 0)
+
+    def test_many_large_multiple_dev(self):
+        self._test_large(50, 0)
 
 if __name__ == "__main__":
     unittest.main()

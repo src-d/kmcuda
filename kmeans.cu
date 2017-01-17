@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <cfloat>
 #include <cinttypes>
-#include <cinttypes>
 #include <algorithm>
 #include <memory>
 
@@ -27,6 +26,10 @@ __constant__ uint32_t d_samples_size;
 __constant__ uint32_t d_clusters_size;
 __constant__ uint32_t d_yy_groups_size;
 __constant__ int d_shmem_size;
+
+//////////////////////----------------------------------------------------------
+// Device functions //----------------------------------------------------------
+//////////////////////----------------------------------------------------------
 
 // https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
 __device__ __forceinline__ uint32_t atomicAggInc(uint32_t *ctr) {
@@ -546,9 +549,9 @@ __global__ void kmeans_yy_local_filter(
   }
 }
 
-////////////////////
-// Host functions //
-////////////////////
+////////////////////------------------------------------------------------------
+// Host functions //------------------------------------------------------------
+////////////////////------------------------------------------------------------
 
 static int check_changed(int iter, float tolerance, uint32_t h_samples_size,
                          const std::vector<int> &devs, int32_t verbosity) {
@@ -601,20 +604,6 @@ static KMCUDAResult prepare_mem(
   return kmcudaSuccess;
 }
 
-static void print_plan(
-    const char *name, const std::vector<std::tuple<uint32_t, uint32_t>>& plan) {
-  printf("%s: [", name);
-  bool first = true;
-  for (auto& p : plan) {
-    if (!first) {
-      printf(", ");
-    }
-    first = false;
-    printf("(%" PRIu32 ", %" PRIu32 ")", std::get<0>(p), std::get<1>(p));
-  }
-  printf("]\n");
-}
-
 extern "C" {
 
 KMCUDAResult kmeans_cuda_setup(
@@ -655,7 +644,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
       max_len = len;
     }
   }
-  CUMEMSET(*dev_sums, 0, max_len / BS_KMPP + 1);
+  CUMEMSET(*dev_sums, 0, upper(max_len, static_cast<uint32_t>(BS_KMPP)));
   size_t dist_sums_size = h_samples_size / BS_KMPP + devs.size();
   std::unique_ptr<float[]> dist_sums(new float[dist_sums_size]);
   memset(dist_sums.get(), 0, dist_sums_size * sizeof(float));
@@ -663,8 +652,11 @@ KMCUDAResult kmeans_cuda_plus_plus(
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
+    if (length == 0) {
+      continue;
+    }
     dim3 block(BS_KMPP, 1, 1);
-    dim3 grid(length / block.x + 1, 1, 1);
+    dim3 grid(upper(length, block.x), 1, 1);
     KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block, block.x * sizeof(float)>>>(
         length, cc,
         reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
@@ -676,7 +668,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
     dim3 block(BS_KMPP, 1, 1);
-    dim3 grid(length / block.x + 1, 1, 1);
+    dim3 grid(upper(length, block.x), 1, 1);
     CUCH(cudaMemcpyAsync(
         host_dists + offset, (*dists)[devi].get(),
         length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
@@ -718,7 +710,10 @@ KMCUDAResult kmeans_cuda_lloyd(
       FOR_EACH_DEVI(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
-        dim3 sgrid(length / sblock.x + 1, 1, 1);
+        if (length == 0) {
+          continue;
+        }
+        dim3 sgrid(upper(length, sblock.x), 1, 1);
         int shmem_size = shmem_sizes[devi];
         int64_t ssqrmem = sblock.x * h_features_size * sizeof(float);
         if (shmem_size > ssqrmem && shmem_size - ssqrmem >=
@@ -741,6 +736,9 @@ KMCUDAResult kmeans_cuda_lloyd(
       FOR_EACH_DEVI(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
+        if (length == 0) {
+          continue;
+        }
         FOR_OTHER_DEVS(
           CUP2P(assignments_prev, offset, length);
           CUP2P(assignments, offset, length);
@@ -760,7 +758,10 @@ KMCUDAResult kmeans_cuda_lloyd(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
-      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      if (length == 0) {
+        continue;
+      }
+      dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, reinterpret_cast<const F*>(samples[devi].get()),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
@@ -769,6 +770,9 @@ KMCUDAResult kmeans_cuda_lloyd(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
+      if (length == 0) {
+        continue;
+      }
       FOR_OTHER_DEVS(
         CUP2P(ccounts, offset, length);
         CUP2P(centroids, offset * h_features_size, length * h_features_size);
@@ -891,7 +895,10 @@ KMCUDAResult kmeans_cuda_yy(
       FOR_EACH_DEVI(
         uint32_t offset, length;
         std::tie(offset, length) = plans[devi];
-        dim3 sigrid(length / siblock.x + 1, 1, 1);
+        if (length == 0) {
+          continue;
+        }
+        dim3 sigrid(upper(length, siblock.x), 1, 1);
         KERNEL_SWITCH(kmeans_yy_init, <<<sigrid, siblock, shmem_sizes[devi]>>>(
             length,
             reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
@@ -905,7 +912,10 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
-      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      if (length == 0) {
+        continue;
+      }
+      dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
           length, offset, reinterpret_cast<const F*>(samples[devi].get()),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
@@ -914,6 +924,9 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
+      if (length == 0) {
+        continue;
+      }
       FOR_OTHER_DEVS(
         CUP2P(ccounts, offset, length);
         CUP2P(centroids, offset * h_features_size, length * h_features_size);
@@ -922,7 +935,10 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
-      dim3 cgrid(length / cblock.x + 1, 1, 1);
+      if (length == 0) {
+        continue;
+      }
+      dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_yy_calc_drifts, <<<cgrid, cblock>>>(
           length, offset, reinterpret_cast<const F*>((*centroids)[devi].get()),
           reinterpret_cast<F*>((*drifts_yy)[devi].get())));
@@ -930,6 +946,9 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = planc[devi];
+      if (length == 0) {
+        continue;
+      }
       FOR_OTHER_DEVS(
         CUP2P(drifts_yy, h_clusters_size * h_features_size + offset, length);
       );
@@ -937,7 +956,10 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = plang[devi];
-      dim3 ggrid(length / gblock.x + 1, 1, 1);
+      if (length == 0) {
+        continue;
+      }
+      dim3 ggrid(upper(length, gblock.x), 1, 1);
       kmeans_yy_find_group_max_drifts<<<ggrid, gblock, shmem_sizes[devi]>>>(
           length, offset, (*assignments_yy)[devi].get(),
           (*drifts_yy)[devi].get());
@@ -945,6 +967,9 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = plang[devi];
+      if (length == 0) {
+        continue;
+      }
       FOR_OTHER_DEVS(
         CUP2P(drifts_yy, offset, length);
       );
@@ -957,7 +982,10 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = plans[devi];
-      dim3 sggrid(length / sgblock.x + 1, 1, 1);
+      if (length == 0) {
+        continue;
+      }
+      dim3 sggrid(upper(length, sgblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_yy_global_filter, <<<sggrid, sgblock>>>(
           length,
           reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
@@ -965,7 +993,7 @@ KMCUDAResult kmeans_cuda_yy(
           (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
           (*assignments)[devi].get() + offset, (*assignments_prev)[devi].get() + offset,
           (*bounds_yy)[devi].get(), (*passed_yy)[devi].get()));
-      dim3 slgrid(length / slblock.x + 1, 1, 1);
+      dim3 slgrid(upper(length, slblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_yy_local_filter, <<<slgrid, slblock, shmem_sizes[devi]>>>(
           reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
           (*passed_yy)[devi].get(), reinterpret_cast<const F*>((*centroids)[devi].get()),
@@ -975,6 +1003,9 @@ KMCUDAResult kmeans_cuda_yy(
     FOR_EACH_DEVI(
       uint32_t offset, length;
       std::tie(offset, length) = plans[devi];
+      if (length == 0) {
+        continue;
+      }
       FOR_OTHER_DEVS(
         CUP2P(assignments_prev, offset, length);
         CUP2P(assignments, offset, length);

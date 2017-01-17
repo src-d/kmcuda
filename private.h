@@ -2,8 +2,11 @@
 #define KMCUDA_PRIVATE_H
 
 #include "kmcuda.h"
+#include <cinttypes>
 #include <tuple>
 #include "wrappers.h"
+
+typedef unsigned long long cuint64_t;
 
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
@@ -14,7 +17,7 @@
 #define CUCH(cuda_call, ret, ...) \
 do { \
   auto __res = cuda_call; \
-  if (__res != 0) { \
+  if (__res != cudaSuccess) { \
     DEBUG("%s\n", #cuda_call); \
     INFO("%s:%d -> %s\n", __FILE__, __LINE__, cudaGetErrorString(__res)); \
     __VA_ARGS__; \
@@ -49,7 +52,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_D2H_ASYNC(dst, dst_stride, src, src_offset, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       dst + dst_stride * devi, (src)[devi].get() + src_offset, \
-      (size) * sizeof(std::remove_reference<decltype(src)>::type::value_type \
+      (size) * sizeof(typename std::remove_reference<decltype(src)>::type::value_type \
           ::element_type), \
       cudaMemcpyDeviceToHost), \
                      kmcudaMemoryCopyError)); \
@@ -63,7 +66,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_H2D_ASYNC(dst, dst_offset, src, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       (dst)[devi].get() + dst_offset, src, \
-      (size) * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
+      (size) * sizeof(typename std::remove_reference<decltype(dst)>::type::value_type \
           ::element_type), \
       cudaMemcpyHostToDevice), \
                      kmcudaMemoryCopyError)); \
@@ -77,7 +80,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMEMCPY_D2D_ASYNC(dst, dst_offset, src, src_offset, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemcpyAsync( \
       (dst)[devi].get() + dst_offset, (src)[devi].get() + src_offset, \
-      (size) * sizeof(std::remove_reference<decltype(dst)>::type::value_type \
+      (size) * sizeof(typename std::remove_reference<decltype(dst)>::type::value_type \
           ::element_type), \
       cudaMemcpyDeviceToDevice), \
                      kmcudaMemoryCopyError)); \
@@ -91,11 +94,11 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUMALLOC_ONEN(dest, size, name, dev) do { \
   void *__ptr; \
   size_t __size = (size) * \
-      sizeof(std::remove_reference<decltype(dest)>::type::value_type::element_type); \
+      sizeof(typename std::remove_reference<decltype(dest)>::type::value_type::element_type); \
   CUCH(cudaMalloc(&__ptr, __size), kmcudaMemoryAllocationFailure, \
        INFO("failed to allocate %zu bytes for " name "\n", \
             static_cast<size_t>(size))); \
-  (dest).emplace_back(reinterpret_cast<std::remove_reference<decltype(dest)> \
+  (dest).emplace_back(reinterpret_cast<typename std::remove_reference<decltype(dest)> \
       ::type::value_type::element_type *>(__ptr)); \
   TRACE("[%d] " name ": %p - %p (%zu)\n", dev, __ptr, \
         reinterpret_cast<char *>(__ptr) + __size, __size); \
@@ -109,11 +112,15 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 
 #define CUMALLOC(dest, size) CUMALLOCN(dest, size, #dest)
 
-#define CUMEMSET(dst, val, size) do { \
+#define CUMEMSET_ASYNC(dst, val, size) do { \
   FOR_EACH_DEVI(CUCH(cudaMemsetAsync( \
       (dst)[devi].get(), val, \
-      size * sizeof(std::remove_reference<decltype(dst)>::type::value_type::element_type)), \
+      size * sizeof(typename std::remove_reference<decltype(dst)>::type::value_type::element_type)), \
                      kmcudaRuntimeError)); \
+} while(false)
+
+#define CUMEMSET(dst, val, size) do { \
+  CUMEMSET_ASYNC(dst, val, size); \
   FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 } while(false)
 
@@ -128,7 +135,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 #define CUP2P(what, offset, size) do { \
   CUCH(cudaMemcpyPeerAsync( \
       (*what)[odevi].get() + offset, devs[odevi], (*what)[devi].get() + offset, \
-      devs[devi], (size) * sizeof(std::remove_reference<decltype(*what)>::type \
+      devs[devi], (size) * sizeof(typename std::remove_reference<decltype(*what)>::type \
       ::value_type::element_type)), \
        kmcudaMemoryCopyError); \
 } while(false)
@@ -167,7 +174,19 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
 } } while(false)
 #endif
 
-inline std::vector<std::tuple<uint32_t, uint32_t>> distribute(
+template <typename T>
+inline T upper(T size, T each) {
+  T div = size / each;
+  if (div * each == size) {
+    return div;
+  }
+  return div + 1;
+}
+
+using plan_t = std::vector<std::tuple<uint32_t, uint32_t>>;
+
+/// @brief (offset, size) pairs.
+inline plan_t distribute(
     uint32_t amount, uint32_t size_each, const std::vector<int> &devs) {
   if (devs.size() == 0) {
     return {};
@@ -215,6 +234,20 @@ inline uint32_t max_distribute_length(
   return max_length;
 }
 
+inline void print_plan(
+    const char *name, const std::vector<std::tuple<uint32_t, uint32_t>>& plan) {
+  printf("%s: [", name);
+  bool first = true;
+  for (auto& p : plan) {
+    if (!first) {
+      printf(", ");
+    }
+    first = false;
+    printf("(%" PRIu32 ", %" PRIu32 ")", std::get<0>(p), std::get<1>(p));
+  }
+  printf("]\n");
+}
+
 extern "C" {
 
 KMCUDAResult kmeans_cuda_plus_plus(
@@ -224,9 +257,9 @@ KMCUDAResult kmeans_cuda_plus_plus(
     udevptrs<float> *dists, udevptrs<float> *dev_sums, float *host_dists,
     float *dists_sum);
 
-KMCUDAResult kmeans_cuda_setup(uint32_t samples_size, uint16_t features_size,
-                               uint32_t clusters_size, uint32_t yy_groups_size,
-                               const std::vector<int> &devs, int32_t verbosity);
+KMCUDAResult kmeans_cuda_setup(
+    uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+    uint32_t yy_groups_size, const std::vector<int> &devs, int32_t verbosity);
 
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yy_groups_size, uint32_t samples_size,
@@ -244,6 +277,20 @@ KMCUDAResult kmeans_init_centroids(
     const std::vector<int> &devs, int device_ptrs, int fp16x2, int32_t verbosity,
     const float *host_centroids,  const udevptrs<float> &samples,
     udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids);
-}
+
+KMCUDAResult knn_cuda_setup(
+    uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
+    const std::vector<int> &devs, int32_t verbosity);
+
+KMCUDAResult knn_cuda_calc(
+    uint16_t k, uint32_t h_samples_size, uint32_t h_clusters_size,
+    uint16_t h_features_size, KMCUDADistanceMetric metric,
+    const std::vector<int> &devs, int fp16x2, int verbosity,
+    const udevptrs<float> &samples, const udevptrs<float> &centroids,
+    const udevptrs<uint32_t> &assignments, const udevptrs<uint32_t> &inv_asses,
+    const udevptrs<uint32_t> &inv_asses_offsets, udevptrs<float> *distances,
+    udevptrs<float>* sample_dists, udevptrs<float> *radiuses,
+    udevptrs<uint32_t> *neighbors);
+}  // extern "C"
 
 #endif  // KMCUDA_PRIVATE_H
