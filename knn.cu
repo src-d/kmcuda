@@ -141,39 +141,48 @@ __global__ void knn_mirror_cluster_distances(float *__restrict__ distances) {
   }
 }
 
-FPATTR void push_sample1(uint16_t k, float dist, float *head) {
-  uint16_t start = 0, finish = k - 1;
-  while (finish - start > 1) {
-    uint16_t middle = (start + finish) / 2;
-    if (head[middle] <= dist) {
-      start = middle;
+FPATTR void push_sample(uint16_t k, float dist, uint32_t index, float *heap) {
+  uint16_t pos = 0;
+  while (true) {
+    float left, right;
+    bool left_le, right_le;
+    if ((2 * pos + 1) < k) {
+      left = heap[4 * pos + 2];
+      left_le = dist >= left;
     } else {
-      finish = middle;
+      left_le = true;
+    }
+    if ((2 * pos + 2) < k) {
+      right = heap[4 * pos + 4];
+      right_le = dist >= right;
+    } else {
+      right_le = true;
+    }
+    if (left_le && right_le) {
+      heap[2 * pos] = dist;
+      *reinterpret_cast<uint32_t *>(heap + 2 * pos + 1) = index;
+      break;
+    }
+    if (!left_le && !right_le) {
+      if (left <= right) {
+        heap[2 * pos] = right;
+        heap[2 * pos + 1] = heap[4 * pos + 5];
+        pos = 2 * pos + 2;
+      } else {
+        heap[2 * pos] = left;
+        heap[2 * pos + 1] = heap[4 * pos + 3];
+        pos = 2 * pos + 1;
+      }
+    } else if (left_le) {
+      heap[2 * pos] = right;
+      heap[2 * pos + 1] = heap[4 * pos + 5];
+      pos = 2 * pos + 2;
+    } else {
+      heap[2 * pos] = left;
+      heap[2 * pos + 1] = heap[4 * pos + 3];
+      pos = 2 * pos + 1;
     }
   }
-  uint16_t inspos = (head[start * 2] >= dist? start : start + 1);
-  for (uint16_t i = k - 1; i > inspos; i--) {
-    head[i] = head[i - 1];
-  }
-  head[inspos] = dist;
-}
-
-FPATTR void push_sample2(uint16_t k, float dist, uint32_t index, float *head) {
-  uint16_t start = 0, finish = k - 1;
-  while (finish - start > 1) {
-    uint16_t middle = (start + finish) / 2;
-    if (head[middle * 2] <= dist) {
-      start = middle;
-    } else {
-      finish = middle;
-    }
-  }
-  uint16_t inspos = (head[start * 2] >= dist? start : start + 1);
-  for (uint16_t i = k - 1; i > inspos; i--) {
-    reinterpret_cast<uint64_t*>(head)[i] = reinterpret_cast<uint64_t*>(head)[i - 1];
-  }
-  head[inspos * 2] = dist;
-  reinterpret_cast<uint32_t*>(head)[inspos * 2 + 1] = index;
 }
 
 template <KMCUDADistanceMetric M, typename F>
@@ -208,8 +217,8 @@ __global__ void knn_assign_shmem(
         samples + sample * d_features_size,
         samples + other_sample * d_features_size);
     if (dist <= mndist) {
-      push_sample2(k, dist, other_sample, mynearest);
-      mndist = mynearest[k * 2 - 2];
+      push_sample(k, dist, other_sample, mynearest);
+      mndist = mynearest[0];
     }
   }
   for (uint32_t cls = 0; cls < d_clusters_size; cls++) {
@@ -231,19 +240,19 @@ __global__ void knn_assign_shmem(
           samples + sample * d_features_size,
           samples + other_sample * d_features_size);
       if (dist <= mndist) {
-        push_sample2(k, dist, other_sample, mynearest);
-        mndist = mynearest[k * 2 - 2];
+        push_sample(k, dist, other_sample, mynearest);
+        mndist = mynearest[0];
       }
     }
   }
-  for (int i = 0; i < static_cast<int>(k); i++) {
-    neighbors[(sample - offset) * k + i] =
-        reinterpret_cast<uint32_t*>(mynearest)[i * 2 + 1];
+  for (int i = k - 1; i >= 0; i--) {
+    neighbors[(sample - offset) * k + i] = reinterpret_cast<uint32_t*>(mynearest)[1];
+    push_sample(k, FLT_MIN, UINT32_MAX, mynearest);
   }
 }
 
 template <KMCUDADistanceMetric M, typename F>
-__global__ void knn_assign_gmem_border(
+__global__ void knn_assign_gmem(
     uint32_t offset, uint32_t length, uint16_t k,
     const float *__restrict__ cluster_distances,
     const float *__restrict__ cluster_radiuses,
@@ -258,11 +267,12 @@ __global__ void knn_assign_gmem_border(
   volatile uint32_t mycls = assignments[sample];
   volatile float mydist = METRIC<M, F>::distance(
       samples + sample * d_features_size, centroids + mycls * d_features_size);
-  float *volatile mynearest = reinterpret_cast<float*>(neighbors + (sample - offset) * k);
-  for (int i = 0; i < static_cast<int>(k); i++) {
-    mynearest[i] = FLT_MAX;
-  }
+  float *volatile mynearest =
+      reinterpret_cast<float*>(neighbors) + (sample - offset) * k * 2;
   volatile float mndist = FLT_MAX;
+  for (int i = 0; i < static_cast<int>(k); i++) {
+    mynearest[i * 2] = FLT_MAX;
+  }
   for (uint32_t pos = inv_asses_offsets[mycls];
        pos < inv_asses_offsets[mycls + 1]; pos++) {
     uint64_t other_sample = inv_asses[pos];
@@ -273,8 +283,8 @@ __global__ void knn_assign_gmem_border(
         samples + sample * d_features_size,
         samples + other_sample * d_features_size);
     if (dist <= mndist) {
-      push_sample1(k, dist, mynearest);
-      mndist = mynearest[k - 1];
+      push_sample(k, dist, other_sample, mynearest);
+      mndist = mynearest[0];
     }
   }
   for (uint32_t cls = 0; cls < d_clusters_size; cls++) {
@@ -286,7 +296,7 @@ __global__ void knn_assign_gmem_border(
       continue;
     }
     float dist = cdist - mydist - cluster_radiuses[cls];
-    if (dist > mndist) {
+    if (dist >= mndist) {
       continue;
     }
     for (uint32_t pos = inv_asses_offsets[cls];
@@ -296,67 +306,15 @@ __global__ void knn_assign_gmem_border(
           samples + sample * d_features_size,
           samples + other_sample * d_features_size);
       if (dist <= mndist) {
-        push_sample1(k, dist, mynearest);
-        mndist = mynearest[k - 1];
+        push_sample(k, dist, other_sample, mynearest);
+        mndist = mynearest[0];
       }
     }
   }
-}
-
-template <KMCUDADistanceMetric M, typename F>
-__global__ void knn_assign_gmem_indices(
-    uint32_t offset, uint32_t length, uint16_t k,
-    const float *__restrict__ cluster_distances,
-    const float *__restrict__ cluster_radiuses,
-    const F *__restrict__ samples, const F *__restrict__ centroids,
-    const uint32_t *assignments, const uint32_t *inv_asses,
-    const uint32_t *inv_asses_offsets,
-    uint32_t *neighbors) {
-  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= length) {
-    return;
-  }
-  sample += offset;
-  volatile uint32_t mycls = assignments[sample];
-  volatile float mydist = METRIC<M, F>::distance(
-      samples + sample * d_features_size, centroids + mycls * d_features_size);
-  volatile float mndist = reinterpret_cast<float*>(neighbors + (sample - offset) * k)[k - 1];
-  uint32_t *volatile myneighbors = neighbors + (sample - offset) * k;
-  for (uint32_t pos = inv_asses_offsets[mycls];
-       pos < inv_asses_offsets[mycls + 1]; pos++) {
-    uint64_t other_sample = inv_asses[pos];
-    if (sample == other_sample) {
-      continue;
-    }
-    float dist = METRIC<M, F>::distance(
-        samples + sample * d_features_size,
-        samples + other_sample * d_features_size);
-    if (dist <= mndist) {
-      *myneighbors++ = other_sample;
-    }
-  }
-  for (uint32_t cls = 0; cls < d_clusters_size; cls++) {
-    if (cls == mycls) {
-      continue;
-    }
-    float cdist = cluster_distances[cls * d_clusters_size + mycls];
-    if (cdist != cdist) {
-      continue;
-    }
-    float dist = cdist - mydist - cluster_radiuses[cls];
-    if (dist > mndist) {
-      continue;
-    }
-    for (uint32_t pos = inv_asses_offsets[cls];
-         pos < inv_asses_offsets[cls + 1]; pos++) {
-      uint64_t other_sample = inv_asses[pos];
-      dist = METRIC<M, F>::distance(
-          samples + sample * d_features_size,
-          samples + other_sample * d_features_size);
-      if (dist <= mndist) {
-        *myneighbors++ = other_sample;
-      }
-    }
+  for (int i = k - 1; i >= 0; i--) {
+    // TODO(v.markovtsev): pop heap leaving one half intact
+    neighbors[(sample - offset) * k + i] = reinterpret_cast<uint32_t*>(mynearest)[1];
+    push_sample(k, FLT_MIN, UINT32_MAX, mynearest);
   }
 }
 
@@ -504,15 +462,9 @@ KMCUDAResult knn_cuda_calc(
     int shmem_size = static_cast<int>(props.sharedMemPerBlock);
     int needed_shmem_size = KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t);
     if (needed_shmem_size > shmem_size) {
-      INFO("device #%d: needed shmem size %d > %d => chose 2-pass slow algo",
-           devs[devi], needed_shmem_size, shmem_size);
-      KERNEL_SWITCH(knn_assign_gmem_border, <<<grid, block>>>(
-          offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
-          reinterpret_cast<const F*>(samples[devi].get()),
-          reinterpret_cast<const F*>(centroids[devi].get()),
-          assignments[devi].get(), inv_asses[devi].get(),
-          inv_asses_offsets[devi].get(), (*neighbors)[devi].get()));
-      KERNEL_SWITCH(knn_assign_gmem_indices, <<<grid, block>>>(
+      INFO("device #%d: needed shmem size %d > %d => using global memory => "
+           "bad performance\n", devs[devi], needed_shmem_size, shmem_size);
+      KERNEL_SWITCH(knn_assign_gmem, <<<grid, block>>>(
           offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
           reinterpret_cast<const F*>(samples[devi].get()),
           reinterpret_cast<const F*>(centroids[devi].get()),

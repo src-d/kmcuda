@@ -565,6 +565,7 @@ class KnnTests(unittest.TestCase):
                 pickle.dump(ca, fout, protocol=-1)
         print("nan: %s" % numpy.nonzero(ca[0][:, 0] != ca[0][:, 0])[0])
         nb = knn_cuda(k, samples, *ca, verbosity=2, device=dev)
+        print("checking...")
         for i, sn in enumerate(nb):
             for j in range(len(sn) - 1):
                 self.assertLessEqual(
@@ -572,8 +573,13 @@ class KnnTests(unittest.TestCase):
                     numpy.linalg.norm(samples[i] - samples[sn[j + 1]]))
             mdist = numpy.linalg.norm(samples[i] - samples[sn[-1]])
             for r in numpy.random.randint(0, high=len(samples), size=100):
-                self.assertLessEqual(
-                    mdist, numpy.linalg.norm(samples[i] - samples[r]))
+                if r not in sn:
+                    try:
+                        self.assertLessEqual(
+                            mdist, numpy.linalg.norm(samples[i] - samples[r]))
+                    except AssertionError as e:
+                        print(i, r)
+                        raise e from None
 
     def test_large_single_dev(self):
         self._test_large(10, 1)
