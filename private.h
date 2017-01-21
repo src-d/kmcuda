@@ -291,6 +291,8 @@ KMCUDAResult knn_cuda_calc(
     const udevptrs<uint32_t> &inv_asses_offsets, udevptrs<float> *distances,
     udevptrs<float>* sample_dists, udevptrs<float> *radiuses,
     udevptrs<uint32_t> *neighbors);
+
+int knn_cuda_neighbors_mem_multiplier(uint16_t k, int dev, int verbosity);
 }  // extern "C"
 
 #endif  // KMCUDA_PRIVATE_H

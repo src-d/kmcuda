@@ -514,9 +514,17 @@ KMCUDAResult knn_cuda(
   neighbors_size *= k;
   FOR_EACH_DEVI(
     if (devs[devi] == device_ptrs) {
-      device_neighbors.emplace_back(neighbors + std::get<0>(nplan[devi]) * k, true);
+      if (knn_cuda_neighbors_mem_multiplier(k, devs[devi], 0) == 2) {
+        INFO("warning: x2 memory is required for neighbors, using the "
+             "external pointer and not able to check the size\n");
+      }
+      device_neighbors.emplace_back(
+          neighbors + std::get<0>(nplan[devi]) * k, true);
     } else {
-      CUMALLOC_ONE(device_neighbors, neighbors_size, devs[devi]);
+      CUMALLOC_ONE(
+          device_neighbors,
+          neighbors_size * knn_cuda_neighbors_mem_multiplier(k, devs[devi], 0),
+          devs[devi]);
     }
   );
   udevptrs<float> device_cluster_distances;

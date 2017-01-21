@@ -319,10 +319,45 @@ __global__ void knn_assign_gmem(
       }
     }
   }
-  for (int i = k - 1; i >= 0; i--) {
-    // TODO(v.markovtsev): pop heap leaving one half intact
-    neighbors[(sample - offset) * k + i] = reinterpret_cast<uint32_t*>(mynearest)[1];
-    push_sample(k, FLT_MIN, UINT32_MAX, mynearest);
+  for (int i = 0; i < k; i++) {
+    uint32_t imax = reinterpret_cast<uint32_t*>(mynearest)[1];
+    push_sample(k - i - 1, mynearest[2 * k - 2 * i - 2],
+                reinterpret_cast<uint32_t*>(mynearest)[2 * k - 2 * i - 1],
+                mynearest);
+    reinterpret_cast<uint32_t*>(mynearest)[2 * k - 2 * i - 1] = imax;
+  }
+  for (int i = 0; i < k; i++) {
+    reinterpret_cast<uint32_t*>(mynearest)[i] =
+        reinterpret_cast<uint32_t*>(mynearest)[2 * i + 1];
+  }
+}
+
+__global__ void knn_assign_gmem_deinterleave1(
+    uint32_t length, uint16_t k, uint32_t *neighbors) {
+  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  if (sample >= length) {
+    return;
+  }
+  if (sample % 2 == 1) {
+    for (int i = 0; i < k; i++) {
+      neighbors[sample * k + i] = neighbors[sample * 2 * k + i];
+    }
+  } else {
+    for (int i = 0; i < k; i++) {
+      neighbors[(length + sample) * k + k + i] = neighbors[sample * 2 * k + i];
+    }
+  }
+}
+
+__global__ void knn_assign_gmem_deinterleave2(
+    uint32_t length, uint16_t k, uint32_t *neighbors) {
+  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  sample *= 2;
+  if (sample >= length) {
+    return;
+  }
+  for (int i = 0; i < k; i++) {
+    neighbors[sample * k + i] = neighbors[(length + sample) * k + k + i];
   }
 }
 
@@ -343,6 +378,19 @@ KMCUDAResult knn_cuda_setup(
          kmcudaMemoryCopyError);
   );
   return kmcudaSuccess;
+}
+
+int knn_cuda_neighbors_mem_multiplier(uint16_t k, int dev, int verbosity) {
+  cudaDeviceProp props;
+  cudaGetDeviceProperties(&props, dev);
+  int shmem_size = static_cast<int>(props.sharedMemPerBlock);
+  int needed_shmem_size = KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t);
+  if (needed_shmem_size > shmem_size) {
+    INFO("device #%d: needed shmem size %d > %d => using global memory\n",
+         dev, needed_shmem_size, shmem_size);
+    return 2;
+  }
+  return 1;
 }
 
 KMCUDAResult knn_cuda_calc(
@@ -460,26 +508,27 @@ KMCUDAResult knn_cuda_calc(
     std::tie(offset, length) = plan[devi];
     dim3 block(KNN_BLOCK_SIZE, 1, 1);
     dim3 grid(upper(h_samples_size, block.x), 1, 1);
-    cudaDeviceProp props;
-    CUCH(cudaGetDeviceProperties(&props, devs[devi]), kmcudaRuntimeError);
-    int shmem_size = static_cast<int>(props.sharedMemPerBlock);
-    int needed_shmem_size = KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t);
-    if (needed_shmem_size > shmem_size) {
-      INFO("device #%d: needed shmem size %d > %d => using global memory => "
-           "bad performance\n", devs[devi], needed_shmem_size, shmem_size);
+    if (knn_cuda_neighbors_mem_multiplier(k, devs[devi], 1) == 2) {
       KERNEL_SWITCH(knn_assign_gmem, <<<grid, block>>>(
           offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
           reinterpret_cast<const F*>(samples[devi].get()),
           reinterpret_cast<const F*>(centroids[devi].get()),
           assignments[devi].get(), inv_asses[devi].get(),
           inv_asses_offsets[devi].get(), (*neighbors)[devi].get()));
+      knn_assign_gmem_deinterleave1<<<grid, block>>>(
+          length, k, (*neighbors)[devi].get());
+      dim3 grid2(upper(h_samples_size, 2 * block.x), 1, 1);
+      knn_assign_gmem_deinterleave2<<<grid2, block>>>(
+          length, k, (*neighbors)[devi].get());
     } else {
-      KERNEL_SWITCH(knn_assign_shmem, <<<grid, block, needed_shmem_size>>>(
-          offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
-          reinterpret_cast<const F*>(samples[devi].get()),
-          reinterpret_cast<const F*>(centroids[devi].get()),
-          assignments[devi].get(), inv_asses[devi].get(),
-          inv_asses_offsets[devi].get(), (*neighbors)[devi].get()));
+      KERNEL_SWITCH(
+          knn_assign_shmem,
+          <<<grid, block, KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t)>>>(
+              offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
+              reinterpret_cast<const F*>(samples[devi].get()),
+              reinterpret_cast<const F*>(centroids[devi].get()),
+              assignments[devi].get(), inv_asses[devi].get(),
+              inv_asses_offsets[devi].get(), (*neighbors)[devi].get()));
     }
   );
   uint64_t dists_calced = 0;
