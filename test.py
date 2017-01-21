@@ -555,12 +555,16 @@ class KnnTests(unittest.TestCase):
 
     def _test_large(self, k, dev):
         cache = "/tmp/kmcuda_knn_cache_large.pickle"
-        samples = numpy.random.rand(50000, 128).astype(numpy.float32)
+        samples = numpy.random.rand(40000, 48).astype(numpy.float32)
+        samples[:10000] += 1.0
+        samples[10000:20000] -= 1.0
+        samples[20000:30000, 0] += 2.0
+        samples[30000:, 0] -= 2.0
         try:
             with open(cache, "rb") as fin:
                 ca = pickle.load(fin)
         except:
-            ca = kmeans_cuda(samples, 1000, seed=777, verbosity=1)
+            ca = kmeans_cuda(samples, 800, seed=777, verbosity=1)
             with open(cache, "wb") as fout:
                 pickle.dump(ca, fout, protocol=-1)
         print("nan: %s" % numpy.nonzero(ca[0][:, 0] != ca[0][:, 0])[0])
@@ -572,8 +576,11 @@ class KnnTests(unittest.TestCase):
                     numpy.linalg.norm(samples[i] - samples[sn[j]]),
                     numpy.linalg.norm(samples[i] - samples[sn[j + 1]]))
             mdist = numpy.linalg.norm(samples[i] - samples[sn[-1]])
+            sn = set(sn)
             for r in numpy.random.randint(0, high=len(samples), size=100):
                 if r not in sn:
+                    if i == r:
+                        continue
                     try:
                         self.assertLessEqual(
                             mdist, numpy.linalg.norm(samples[i] - samples[r]))

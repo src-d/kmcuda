@@ -11,7 +11,7 @@
 
 __constant__ uint32_t d_samples_size;
 __constant__ uint32_t d_clusters_size;
-__constant__ int d_shmem_size;
+__device__ unsigned long long int d_dists_calced;
 
 template <typename T>
 FPATTR T dupper(T size, T each) {
@@ -207,8 +207,10 @@ __global__ void knn_assign_shmem(
   for (int i = 0; i < static_cast<int>(k); i++) {
     mynearest[i * 2] = FLT_MAX;
   }
-  for (uint32_t pos = inv_asses_offsets[mycls];
-       pos < inv_asses_offsets[mycls + 1]; pos++) {
+  uint32_t pos_start = inv_asses_offsets[mycls];
+  uint32_t pos_finish = inv_asses_offsets[mycls + 1];
+  atomicAdd(&d_dists_calced, pos_finish - pos_start);
+  for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
     uint64_t other_sample = inv_asses[pos];
     if (sample == other_sample) {
       continue;
@@ -230,11 +232,13 @@ __global__ void knn_assign_shmem(
       continue;
     }
     float dist = cdist - mydist - cluster_radiuses[cls];
-    if (dist >= mndist) {
+    if (dist > mndist) {
       continue;
     }
-    for (uint32_t pos = inv_asses_offsets[cls];
-         pos < inv_asses_offsets[cls + 1]; pos++) {
+    uint32_t pos_start = inv_asses_offsets[cls];
+    uint32_t pos_finish = inv_asses_offsets[cls + 1];
+    atomicAdd(&d_dists_calced, pos_finish - pos_start);
+    for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
       uint64_t other_sample = inv_asses[pos];
       dist = METRIC<M, F>::distance(
           samples + sample * d_features_size,
@@ -273,8 +277,10 @@ __global__ void knn_assign_gmem(
   for (int i = 0; i < static_cast<int>(k); i++) {
     mynearest[i * 2] = FLT_MAX;
   }
-  for (uint32_t pos = inv_asses_offsets[mycls];
-       pos < inv_asses_offsets[mycls + 1]; pos++) {
+  uint32_t pos_start = inv_asses_offsets[mycls];
+  uint32_t pos_finish = inv_asses_offsets[mycls + 1];
+  atomicAdd(&d_dists_calced, pos_finish - pos_start);
+  for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
     uint64_t other_sample = inv_asses[pos];
     if (sample == other_sample) {
       continue;
@@ -296,11 +302,13 @@ __global__ void knn_assign_gmem(
       continue;
     }
     float dist = cdist - mydist - cluster_radiuses[cls];
-    if (dist >= mndist) {
+    if (dist > mndist) {
       continue;
     }
-    for (uint32_t pos = inv_asses_offsets[cls];
-         pos < inv_asses_offsets[cls + 1]; pos++) {
+    pos_start = inv_asses_offsets[cls];
+    pos_finish = inv_asses_offsets[cls + 1];
+    atomicAdd(&d_dists_calced, pos_finish - pos_start);
+    for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
       uint64_t other_sample = inv_asses[pos];
       dist = METRIC<M, F>::distance(
           samples + sample * d_features_size,
@@ -330,13 +338,8 @@ KMCUDAResult knn_cuda_setup(
          kmcudaMemoryCopyError);
     CUCH(cudaMemcpyToSymbol(d_clusters_size, &h_clusters_size, sizeof(h_clusters_size)),
          kmcudaMemoryCopyError);
-    cudaDeviceProp props;
-    CUCH(cudaGetDeviceProperties(&props, dev), kmcudaRuntimeError);
-    int h_shmem_size = static_cast<int>(props.sharedMemPerBlock);
-    DEBUG("GPU #%" PRIu32 " has %d bytes of shared memory per block\n",
-          dev, h_shmem_size);
-    h_shmem_size /= sizeof(uint32_t);
-    CUCH(cudaMemcpyToSymbol(d_shmem_size, &h_shmem_size, sizeof(h_shmem_size)),
+    uint64_t zero = 0;
+    CUCH(cudaMemcpyToSymbol(d_dists_calced, &zero, sizeof(d_dists_calced)),
          kmcudaMemoryCopyError);
   );
   return kmcudaSuccess;
@@ -479,6 +482,16 @@ KMCUDAResult knn_cuda_calc(
           inv_asses_offsets[devi].get(), (*neighbors)[devi].get()));
     }
   );
+  uint64_t dists_calced = 0;
+  FOR_EACH_DEV(
+    uint64_t h_dists_calced = 0;
+    CUCH(cudaMemcpyFromSymbol(&h_dists_calced, d_dists_calced, sizeof(h_dists_calced)),
+         kmcudaMemoryCopyError);
+    DEBUG("#%d dists_calced: %" PRIu64 "\n", dev, h_dists_calced);
+    dists_calced += h_dists_calced;
+  );
+  uint64_t max_dists_calced = static_cast<uint64_t>(h_samples_size) * h_samples_size;
+  INFO("calculated %f of all the distances\n", (dists_calced + .0) / max_dists_calced);
   return kmcudaSuccess;
 }
 
