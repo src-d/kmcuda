@@ -46,6 +46,11 @@ to another cluster B's members if C<sub>AB</sub> - SA - R<sub>B</sub> is greater
 than the current maximum K-nn distance. This resembles the [ball tree
 algorithm](http://scikit-learn.org/stable/modules/neighbors.html#ball-tree).
 
+The implemented algorithm is tolerant to NANs. There are two variants depending
+on whether k is small enough to fit the sample's neighbors into CUDA shared memory.
+Internally, the neighbors list is a [binary heap](https://en.wikipedia.org/wiki/Binary_heap)
+- that reduces the complexity multiplier from O(k) to O(log k).
+
 Notes
 -----
 Lloyd is tolerant to samples with NaN features while Yinyang is not.

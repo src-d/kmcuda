@@ -7,7 +7,8 @@
 #define CLUSTER_DISTANCES_SHMEM 12288  // in float-s
 #define CLUSTER_RADIUSES_BLOCK_SIZE 512
 #define CLUSTER_RADIUSES_SHMEM 8192  // in float-s
-#define KNN_BLOCK_SIZE 512
+#define KNN_BLOCK_SIZE_SHMEM 512
+#define KNN_BLOCK_SIZE_GMEM 1024
 
 __constant__ uint32_t d_samples_size;
 __constant__ uint32_t d_clusters_size;
@@ -384,7 +385,7 @@ int knn_cuda_neighbors_mem_multiplier(uint16_t k, int dev, int verbosity) {
   cudaDeviceProp props;
   cudaGetDeviceProperties(&props, dev);
   int shmem_size = static_cast<int>(props.sharedMemPerBlock);
-  int needed_shmem_size = KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t);
+  int needed_shmem_size = KNN_BLOCK_SIZE_SHMEM * 2 * k * sizeof(uint32_t);
   if (needed_shmem_size > shmem_size) {
     INFO("device #%d: needed shmem size %d > %d => using global memory\n",
          dev, needed_shmem_size, shmem_size);
@@ -506,9 +507,9 @@ KMCUDAResult knn_cuda_calc(
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
-    dim3 block(KNN_BLOCK_SIZE, 1, 1);
-    dim3 grid(upper(h_samples_size, block.x), 1, 1);
     if (knn_cuda_neighbors_mem_multiplier(k, devs[devi], 1) == 2) {
+      dim3 block(KNN_BLOCK_SIZE_GMEM, 1, 1);
+      dim3 grid(upper(h_samples_size, block.x), 1, 1);
       KERNEL_SWITCH(knn_assign_gmem, <<<grid, block>>>(
           offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
           reinterpret_cast<const F*>(samples[devi].get()),
@@ -521,9 +522,11 @@ KMCUDAResult knn_cuda_calc(
       knn_assign_gmem_deinterleave2<<<grid2, block>>>(
           length, k, (*neighbors)[devi].get());
     } else {
+      dim3 block(KNN_BLOCK_SIZE_SHMEM, 1, 1);
+      dim3 grid(upper(h_samples_size, block.x), 1, 1);
       KERNEL_SWITCH(
           knn_assign_shmem,
-          <<<grid, block, KNN_BLOCK_SIZE * 2 * k * sizeof(uint32_t)>>>(
+          <<<grid, block, KNN_BLOCK_SIZE_SHMEM * 2 * k * sizeof(uint32_t)>>>(
               offset, length, k, (*distances)[devi].get(), (*radiuses)[devi].get(),
               reinterpret_cast<const F*>(samples[devi].get()),
               reinterpret_cast<const F*>(centroids[devi].get()),
