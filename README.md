@@ -48,11 +48,13 @@ algorithm](http://scikit-learn.org/stable/modules/neighbors.html#ball-tree).
 
 The implemented algorithm is tolerant to NANs. There are two variants depending
 on whether k is small enough to fit the sample's neighbors into CUDA shared memory.
-Internally, the neighbors list is a [binary heap](https://en.wikipedia.org/wiki/Binary_heap)
-- that reduces the complexity multiplier from O(k) to O(log k).
+Internally, the neighbors list is a [binary heap](https://en.wikipedia.org/wiki/Binary_heap) -
+that reduces the complexity multiplier from O(k) to O(log k).
 
 The implementation yields identical results to `sklearn.neighbors.NearestNeighbors`
 except cases in which adjacent distances are equal and the order is undefined.
+That is, the returned indices are sorted in the increasing order of the
+corresponding distances.
 
 Notes
 -----
