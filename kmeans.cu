@@ -392,7 +392,7 @@ __global__ void kmeans_yy_find_group_max_drifts(
   extern __shared__ uint32_t shmem[];
   float *cd = (float *)shmem;
   uint32_t *cg = shmem + step;
-  float my_max = FLT_MIN;
+  float my_max = -FLT_MAX;
   for (uint32_t offset = 0; offset < d_clusters_size; offset += step) {
     __syncthreads();
     for (uint32_t i = 0; i < size_each; i++) {

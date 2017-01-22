@@ -59,7 +59,7 @@ __global__ void knn_calc_cluster_radiuses(
     }
   }
   // stage 2 - find the maximum distance
-  float max_dist = FLT_MIN;
+  float max_dist = -1;
   for (uint32_t ass = inv_asses_offsets[ci]; ass < inv_asses_offsets[ci + 1];
        ass++) {
     float dist = METRIC<M, F>::finalize(sample_dists[inv_asses[ass]]);
@@ -67,7 +67,7 @@ __global__ void knn_calc_cluster_radiuses(
       max_dist = dist;
     }
   }
-  radiuses[ci] = max_dist > FLT_MIN? max_dist : NAN;
+  radiuses[ci] = max_dist > -1? max_dist : NAN;
 }
 
 /// distances must be zero-ed!
@@ -252,7 +252,7 @@ __global__ void knn_assign_shmem(
   }
   for (int i = k - 1; i >= 0; i--) {
     neighbors[(sample - offset) * k + i] = reinterpret_cast<uint32_t*>(mynearest)[1];
-    push_sample(k, FLT_MIN, UINT32_MAX, mynearest);
+    push_sample(k, -1, UINT32_MAX, mynearest);
   }
 }
 

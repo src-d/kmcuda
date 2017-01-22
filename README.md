@@ -51,6 +51,9 @@ on whether k is small enough to fit the sample's neighbors into CUDA shared memo
 Internally, the neighbors list is a [binary heap](https://en.wikipedia.org/wiki/Binary_heap)
 - that reduces the complexity multiplier from O(k) to O(log k).
 
+The implementation yields identical results to `sklearn.neighbors.NearestNeighbors`
+except cases in which adjacent distances are equal and the order is undefined.
+
 Notes
 -----
 Lloyd is tolerant to samples with NaN features while Yinyang is not.
@@ -153,7 +156,6 @@ You should see something like this:
 
 ```python
 import numpy
-from matplotlib import pyplot
 from libKMCUDA import kmeans_cuda, knn_cuda
 
 numpy.random.seed(0)
@@ -162,12 +164,26 @@ angs = numpy.random.rand(10000) * 2 * numpy.pi
 for i in range(10000):
     arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
 ca = kmeans_cuda(arr, 4, metric="cos", verbosity=1, seed=3)
-neighbors = knn_cuda(10, arr, *ca, metric="cos", verbosity=1)
-print(neighbors[42])
+neighbors = knn_cuda(10, arr, *ca, metric="cos", verbosity=1, device=1)
+print(neighbors[0])
 ```
 You should see
 ```
-array([...])
+reassignments threshold: 100
+performing kmeans++...
+done
+too few clusters for this yinyang_t => Lloyd
+iteration 1: 10000 reassignments
+iteration 2: 926 reassignments
+iteration 3: 416 reassignments
+iteration 4: 187 reassignments
+iteration 5: 87 reassignments
+initializing the inverse assignments...
+calculating the cluster radiuses...
+calculating the centroid distance matrix...
+searching for the nearest neighbors...
+calculated 0.276552 of all the distances
+[1279 1206 9846 9886 9412 9823 7019 7075 6453 8933]
 ```
 
 Python API
