@@ -16,10 +16,18 @@
 #include "private.h"
 
 
-static KMCUDAResult check_args(
-    float tolerance, float yinyang_t, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, uint32_t device, bool fp16x2, int verbosity,
-    const float *samples, float *centroids, uint32_t *assignments) {
+static KMCUDAResult check_kmeans_args(
+    float tolerance,
+    float yinyang_t,
+    uint32_t samples_size,
+    uint16_t features_size,
+    uint32_t clusters_size,
+    uint32_t device,
+    bool fp16x2,
+    int verbosity,
+    const float *samples,
+    float *centroids,
+    uint32_t *assignments) {
   if (clusters_size < 2 || clusters_size == UINT32_MAX) {
     return kmcudaInvalidArguments;
   }
@@ -130,6 +138,39 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
   return std::move(devs);
 }
 
+template <typename T>
+static KMCUDAResult init_udevptrs(
+    uint32_t length, uint32_t size_each,
+    int32_t device_ptrs, const std::vector<int> &devs, int verbosity,
+    const T *source, udevptrs<T> *dest, int32_t *origin_devi_ptr = nullptr) {
+  size_t device_size = static_cast<size_t>(length) * size_each;
+  int32_t origin_devi = -1;
+  FOR_EACH_DEVI(
+      if (devs[devi] == device_ptrs) {
+        dest->emplace_back(const_cast<T*>(source), true);
+        origin_devi = devi;
+      } else {
+        CUMALLOC_ONE(*dest, device_size, devs[devi]);
+      }
+  );
+  if (origin_devi_ptr != nullptr) {
+    *origin_devi_ptr = origin_devi;
+  }
+  if (device_ptrs < 0) {
+    CUMEMCPY_H2D_ASYNC(*dest, 0, source, device_size);
+  } else {
+    FOR_EACH_DEVI(
+        if (static_cast<int32_t>(devi) != origin_devi) {
+          CUCH(cudaMemcpyPeerAsync(
+              (*dest)[devi].get(), devs[devi], source,
+              device_ptrs, device_size * sizeof(T)),
+               kmcudaMemoryCopyError);
+        }
+    );
+  }
+  return kmcudaSuccess;
+}
+
 static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
   FOR_EACH_DEV(
     size_t free_bytes, total_bytes;
@@ -160,14 +201,14 @@ KMCUDAResult kmeans_init_centroids(
         CUMEMCPY_H2D_ASYNC(*centroids, 0, host_centroids,
                            clusters_size * features_size);
       } else {
-        long long origin_devi = -1;
+        int32_t origin_devi = -1;
         FOR_EACH_DEVI(
           if (devs[devi] == device_ptrs) {
             origin_devi = devi;
           }
         );
         FOR_EACH_DEVI(
-          if (static_cast<long long>(devi) != origin_devi) {
+          if (static_cast<int32_t>(devi) != origin_devi) {
             CUCH(cudaMemcpyPeerAsync(
                 (*centroids)[devi].get(), devs[devi], host_centroids,
                 device_ptrs, clusters_size * features_size * sizeof(float)),
@@ -281,7 +322,7 @@ KMCUDAResult kmeans_cuda(
         PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p\n", init, tolerance,
         yinyang_t, metric, samples_size, features_size, clusters_size, seed,
         device, fp16x2, verbosity, samples, centroids, assignments);
-  RETERR(check_args(
+  RETERR(check_kmeans_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
       device, fp16x2, verbosity, samples, centroids, assignments));
   INFO("reassignments threshold: %" PRIu32 "\n", uint32_t(tolerance * samples_size));
@@ -292,28 +333,9 @@ KMCUDAResult kmeans_cuda(
     return kmcudaNoSuchDevice;
   }
   udevptrs<float> device_samples;
-  size_t device_samples_size = static_cast<size_t>(samples_size) * features_size;
-  long long origin_devi = -1;
-  FOR_EACH_DEVI(
-    if (devs[devi] == device_ptrs) {
-      device_samples.emplace_back(const_cast<float*>(samples), true);
-      origin_devi = devi;
-    } else {
-      CUMALLOC_ONE(device_samples, device_samples_size, devs[devi]);
-    }
-  );
-  if (device_ptrs < 0) {
-    CUMEMCPY_H2D_ASYNC(device_samples, 0, samples, device_samples_size);
-  } else {
-    FOR_EACH_DEVI(
-      if (static_cast<long long>(devi) != origin_devi) {
-        CUCH(cudaMemcpyPeerAsync(
-            device_samples[devi].get(), devs[devi], samples,
-            device_ptrs, device_samples_size * sizeof(float)),
-             kmcudaMemoryCopyError);
-      }
-    );
-  }
+  int32_t origin_devi;
+  RETERR(init_udevptrs(samples_size, features_size, device_ptrs, devs,
+                       verbosity, samples, &device_samples, &origin_devi));
   udevptrs<float> device_centroids;
   size_t centroids_size = static_cast<size_t>(clusters_size) * features_size;
   FOR_EACH_DEV(
@@ -393,13 +415,13 @@ KMCUDAResult kmeans_cuda(
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
-      CUCH(cudaMemcpyPeer(centroids, device_ptrs,
-                          device_centroids[devs.size() - 1].get(),
-                          devs.back(), centroids_size * sizeof(float)),
+      CUCH(cudaMemcpyPeerAsync(centroids, device_ptrs,
+                               device_centroids[devs.size() - 1].get(),
+                               devs.back(), centroids_size * sizeof(float)),
            kmcudaMemoryCopyError);
-      CUCH(cudaMemcpyPeer(assignments, device_ptrs,
-                          device_assignments[devs.size() - 1].get(),
-                          devs.back(), samples_size * sizeof(uint32_t)),
+      CUCH(cudaMemcpyPeerAsync(assignments, device_ptrs,
+                               device_assignments[devs.size() - 1].get(),
+                               devs.back(), samples_size * sizeof(uint32_t)),
            kmcudaMemoryCopyError);
       SYNC_ALL_DEVS;
     }
@@ -408,10 +430,200 @@ KMCUDAResult kmeans_cuda(
   return kmcudaSuccess;
 }
 
-KMCUDAResult normalize_cuda(
-    const float *samples, uint16_t features_size, uint32_t samples_size,
-    uint32_t device, int device_ptrs, int32_t verbosity, float *output) {
+////////////--------------------------------------------------------------------
+/// K-nn ///--------------------------------------------------------------------
+////////////--------------------------------------------------------------------
 
+static KMCUDAResult check_knn_args(
+    uint16_t k, uint32_t samples_size, uint16_t features_size,
+    uint32_t clusters_size, uint32_t device, int32_t fp16x2, int32_t verbosity,
+    const float *samples, const float *centroids, const uint32_t *assignments,
+    uint32_t *neighbors) {
+  if (k == 0) {
+    return kmcudaInvalidArguments;
+  }
+  if (clusters_size < 2 || clusters_size == UINT32_MAX) {
+    return kmcudaInvalidArguments;
+  }
+  if (features_size == 0) {
+    return kmcudaInvalidArguments;
+  }
+  if (samples_size < clusters_size) {
+    return kmcudaInvalidArguments;
+  }
+  if (device < 0) {
+    return kmcudaNoSuchDevice;
+  }
+  int devices = 0;
+  cudaGetDeviceCount(&devices);
+  if (device > (1u << devices)) {
+    return kmcudaNoSuchDevice;
+  }
+  if (samples == nullptr || centroids == nullptr || assignments == nullptr ||
+      neighbors == nullptr) {
+    return kmcudaInvalidArguments;
+  }
+#if CUDA_ARCH < 60
+  if (fp16x2) {
+    INFO("CUDA device arch %d does not support fp16\n", CUDA_ARCH);
+    return kmcudaInvalidArguments;
+  }
+#endif
+  return kmcudaSuccess;
+}
+
+KMCUDAResult knn_cuda(
+    uint16_t k, KMCUDADistanceMetric metric, uint32_t samples_size,
+    uint16_t features_size, uint32_t clusters_size, uint32_t device,
+    int32_t device_ptrs, int32_t fp16x2, int32_t verbosity,
+    const float *samples, const float *centroids, const uint32_t *assignments,
+    uint32_t *neighbors) {
+  DEBUG("arguments: %" PRIu16 " %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %" PRIu32
+        " %" PRIi32 " %" PRIi32 " %" PRIi32 " %p %p %p %p\n",
+        k, metric, samples_size, features_size, clusters_size, device,
+        device_ptrs, fp16x2, verbosity, samples, centroids, assignments,
+        neighbors);
+  check_knn_args(k, samples_size, features_size, clusters_size, device, fp16x2,
+                 verbosity, samples, centroids, assignments, neighbors);
+  auto devs = setup_devices(device, device_ptrs, verbosity);
+  if (devs.empty()) {
+    return kmcudaNoSuchDevice;
+  }
+  udevptrs<float> device_samples;
+  udevptrs<float> device_centroids;
+  udevptrs<uint32_t> device_assignments;
+  int32_t origin_devi;
+  RETERR(init_udevptrs(samples_size, features_size, device_ptrs, devs,
+                       verbosity, samples, &device_samples, &origin_devi));
+  RETERR(init_udevptrs(clusters_size, features_size, device_ptrs, devs,
+                       verbosity, centroids, &device_centroids));
+  RETERR(init_udevptrs(samples_size, 1, device_ptrs, devs,
+                       verbosity, assignments, &device_assignments));
+  udevptrs<uint32_t> device_inv_asses, device_inv_asses_offsets;
+  CUMALLOC(device_inv_asses, samples_size);
+  CUMALLOC(device_inv_asses_offsets, clusters_size + 1);
+  udevptrs<uint32_t> device_neighbors;
+  auto nplan = distribute(samples_size, features_size * sizeof(float), devs);
+  size_t neighbors_size = 0;
+  for (auto &p : nplan) {
+    auto length = std::get<1>(p);
+    if (length > neighbors_size) {
+      neighbors_size = length;
+    }
+  }
+  neighbors_size *= k;
+  FOR_EACH_DEVI(
+    if (devs[devi] == device_ptrs) {
+      if (knn_cuda_neighbors_mem_multiplier(k, devs[devi], 0) == 2) {
+        INFO("warning: x2 memory is required for neighbors, using the "
+             "external pointer and not able to check the size\n");
+      }
+      device_neighbors.emplace_back(
+          neighbors + std::get<0>(nplan[devi]) * k, true);
+    } else {
+      CUMALLOC_ONE(
+          device_neighbors,
+          neighbors_size * knn_cuda_neighbors_mem_multiplier(k, devs[devi], 0),
+          devs[devi]);
+    }
+  );
+  udevptrs<float> device_cluster_distances;
+  CUMALLOC(device_cluster_distances, clusters_size * clusters_size);
+  udevptrs<float> device_sample_dists;
+  if (clusters_size * clusters_size < samples_size) {
+    CUMALLOC(device_sample_dists, samples_size);
+  } else {
+    DEBUG("using the centroid distances matrix as the sample distances temporary\n");
+  }
+  udevptrs<float> device_cluster_radiuses;
+  CUMALLOC(device_cluster_radiuses, clusters_size);
+  if (verbosity > 1) {
+    RETERR(print_memory_stats(devs));
+  }
+  RETERR(knn_cuda_setup(samples_size, features_size, clusters_size,
+                        devs, verbosity),
+         DEBUG("knn_cuda_setup failed: %s\n", CUERRSTR()));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStart());
+  #endif
+  {
+    INFO("initializing the inverse assignments...\n");
+    auto asses_with_idxs = std::unique_ptr<std::tuple<uint32_t, uint32_t>[]>(
+        new std::tuple<uint32_t, uint32_t>[samples_size]);
+    if (device_ptrs < 0) {
+      #pragma omp parallel for
+      for (uint32_t s = 0; s < samples_size; s++) {
+        asses_with_idxs[s] = std::make_tuple(assignments[s], s);
+      }
+    } else {
+      auto asses_on_host =
+          std::unique_ptr<uint32_t[]>(new uint32_t[samples_size]);
+      cudaSetDevice(device_ptrs);
+      CUCH(cudaMemcpy(
+          asses_on_host.get(), assignments, samples_size * sizeof(uint32_t),
+          cudaMemcpyDeviceToHost), kmcudaRuntimeError);
+      #pragma omp parallel for
+      for (uint32_t s = 0; s < samples_size; s++) {
+        asses_with_idxs[s] = std::make_tuple(asses_on_host[s], s);
+      }
+    }
+    std::sort(asses_with_idxs.get(), asses_with_idxs.get() + samples_size);
+    auto asses_sorted =
+        std::unique_ptr<uint32_t[]>(new uint32_t[samples_size]);
+    auto asses_offsets =
+        std::unique_ptr<uint32_t[]>(new uint32_t[clusters_size + 1]);
+    uint32_t cls = 0;
+    asses_offsets[0] = 0;
+    for (uint32_t s = 0; s < samples_size; s++) {
+      uint32_t newcls;
+      std::tie(newcls, asses_sorted[s]) = asses_with_idxs[s];
+      if (newcls != cls) {
+        for (auto icls = newcls; icls > cls; icls--) {
+          asses_offsets[icls] = s;
+        }
+        cls = newcls;
+      }
+    }
+    for (auto icls = clusters_size; icls > cls; icls--) {
+      asses_offsets[icls] = samples_size;
+    }
+    CUMEMCPY_H2D_ASYNC(device_inv_asses, 0, asses_sorted.get(), samples_size);
+    CUMEMCPY_H2D_ASYNC(device_inv_asses_offsets, 0, asses_offsets.get(), clusters_size + 1);
+  }
+  CUMEMSET_ASYNC(device_cluster_distances, 0, clusters_size * clusters_size);
+  if (clusters_size * clusters_size < samples_size) {
+    CUMEMSET_ASYNC(device_sample_dists, 0, samples_size);
+  }
+  RETERR(knn_cuda_calc(
+      k, samples_size, clusters_size, features_size, metric, devs, fp16x2,
+      verbosity, device_samples, device_centroids, device_assignments,
+      device_inv_asses, device_inv_asses_offsets, &device_cluster_distances,
+      &device_sample_dists, &device_cluster_radiuses, &device_neighbors));
+  #ifdef PROFILE
+  FOR_EACH_DEV(cudaProfilerStop());
+  #endif
+
+  if (device_ptrs < 0) {
+    FOR_EACH_DEVI(
+      CUCH(cudaMemcpyAsync(neighbors + std::get<0>(nplan[devi]) * k,
+                           device_neighbors[devi].get(),
+                           std::get<1>(nplan[devi]) * k * sizeof(float),
+                           cudaMemcpyDeviceToHost),
+           kmcudaMemoryCopyError);
+    );
+  } else {
+    FOR_EACH_DEVI(
+      if (static_cast<int32_t>(devi) == origin_devi) {
+        continue;
+      }
+      CUCH(cudaMemcpyPeerAsync(
+          neighbors + std::get<0>(nplan[devi]) * k, device_ptrs,
+          device_neighbors[devi].get(), devs[devi],
+          std::get<1>(nplan[devi]) * k * sizeof(float)),
+           kmcudaMemoryCopyError);
+    );
+  }
+  SYNC_ALL_DEVS;
   DEBUG("return kmcudaSuccess\n");
   return kmcudaSuccess;
 }

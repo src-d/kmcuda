@@ -15,7 +15,7 @@ if (NOT DEFINED CUDA_ARCH)
 endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -Wall -Werror -DCUDA_ARCH=${CUDA_ARCH} -std=c++11 ${OpenMP_CXX_FLAGS}")
 set(SOURCE_FILES kmcuda.cc kmcuda.h wrappers.h private.h fp_abstraction.h
-                 metric_abstraction.h kernel.cu)
+                 metric_abstraction.h kmeans.cu knn.cu)
 if (NOT DISABLE_PYTHON)
   list(APPEND SOURCE_FILES python.cc)
 endif()

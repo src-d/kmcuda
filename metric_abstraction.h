@@ -41,8 +41,7 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
 
   FPATTR static float distance(const F *__restrict__ v1, const F *__restrict__ v2) {
     // Kahan summation with inverted c
-    F dist = _const<F>(0);
-    F corr = _const<F>(0);
+    F dist = _const<F>(0), corr = _const<F>(0);
     #pragma unroll 4
     for (uint16_t f = 0; f < d_features_size; f++) {
       F d = _sub(v1[f], v2[f]);
@@ -52,6 +51,25 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
       dist = t;
     }
     return _sqrt(_float(_fin(dist)));
+  }
+
+  FPATTR static float partial(const F *__restrict__ v1, const F *__restrict__ v2,
+                              uint16_t size) {
+    // Kahan summation with inverted c
+    F dist = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint16_t f = 0; f < size; f++) {
+      F d = _sub(v1[f], v2[f]);
+      F y = _fma(corr, d, d);
+      F t = _add(dist, y);
+      corr = _sub(y, _sub(t, dist));
+      dist = t;
+    }
+    return _float(_fin(dist));
+  }
+
+  FPATTR static float finalize(float partial) {
+    return _sqrt(partial);
   }
 
   FPATTR static void normalize(uint32_t count, F *vec) {
@@ -95,6 +113,26 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
       prod = tprod;
     }
     return _float(distance(_const<F>(1), _const<F>(1), prod));
+  }
+
+  FPATTR static float partial(const F *__restrict__ v1, const F *__restrict__ v2,
+                              uint16_t size) {
+    // Kahan summation with inverted c
+    F prod = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint16_t f = 0; f < size; f++) {
+      F yprod = _fma(corr, v1[f], v2[f]);
+      F tprod = _add(prod, yprod);
+      corr = _sub(yprod, _sub(tprod, prod));
+      prod = tprod;
+    }
+    return _float(_fin(prod));
+  }
+
+  FPATTR static float finalize(float partial) {
+    if (partial >= 1.f) return 0.f;
+    if (partial <= -1.f) return M_PI;
+    return acos(partial);
   }
 
   FPATTR static void normalize(uint32_t count __attribute__((unused)), float *vec) {
