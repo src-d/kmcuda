@@ -8,7 +8,7 @@ import numpy
 from libKMCUDA import kmeans_cuda, knn_cuda, supports_fp16
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_distances
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, DistanceMetric
 
 
 class CUDA_cuda4py(object):
@@ -575,7 +575,7 @@ class KnnTests(unittest.TestCase):
                 self.assertLessEqual(
                     numpy.linalg.norm(samples[i] - samples[sn[j]]) -
                     numpy.linalg.norm(samples[i] - samples[sn[j + 1]]),
-                    .0000002)
+                    .0000003)
             mdist = numpy.linalg.norm(samples[i] - samples[sn[-1]])
             sn = set(sn)
             for r in numpy.random.randint(0, high=len(samples), size=100):
@@ -600,6 +600,52 @@ class KnnTests(unittest.TestCase):
 
     def test_many_large_multiple_dev(self):
         self._test_large(50, 0)
+
+    def _test_device_ptr(self, dev):
+        cuda = CUDA()
+        sdevptr = cuda.api.allocate(self.samples.size * 4, 0)
+        cuda.api.copy_to_device(sdevptr, self.samples)
+        cdevptr, adevptr = kmeans_cuda(
+            (sdevptr, 0, self.samples.shape), 50, init="random", device=0,
+            verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        cuda.api.wrap(cdevptr, 0)
+        cuda.api.wrap(adevptr, 0)
+        ndevptr = knn_cuda(10, (sdevptr, 0, self.samples.shape),
+                           (cdevptr, 50), adevptr, device=dev, verbosity=2)
+        cuda.api.wrap(ndevptr, 0)
+        try:
+            nb = cuda.api.copy_to_host(
+                ndevptr, self.samples.shape[0] * 10, numpy.uint32) \
+                .reshape((self.samples.shape[0], 10))
+            bn = NearestNeighbors(n_neighbors=10).fit(self.samples).kneighbors()[1]
+            self.assertEqual((nb != bn).sum(), 0)
+        finally:
+            cuda.api.free(sdevptr)
+            cuda.api.free(cdevptr)
+            cuda.api.free(adevptr)
+            cuda.api.free(ndevptr)
+
+    def test_device_ptr_same_dev(self):
+        self._test_device_ptr(1)
+
+    def test_device_ptr_other_dev(self):
+        self._test_device_ptr(3)
+
+    def test_device_ptr_all_dev(self):
+        self._test_device_ptr(0)
+
+    def test_cosine_metric(self):
+        samples = self.samples.copy()
+        samples /= numpy.linalg.norm(samples, axis=1)[:, numpy.newaxis]
+        ca = kmeans_cuda(samples, 50, seed=777, verbosity=1, metric="angular")
+        nb = knn_cuda(40, samples, *ca, verbosity=2, device=1, metric="angular")
+        bn = NearestNeighbors(
+            n_neighbors=40,
+            metric=lambda x, y: numpy.arccos(max(min(x.dot(y), 1), -1))) \
+            .fit(samples).kneighbors()[1]
+        print("diff: %d" % (nb != bn).sum())
+        self.assertLessEqual((nb != bn).sum(), 114918)
+
 
 if __name__ == "__main__":
     unittest.main()
