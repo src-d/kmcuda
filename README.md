@@ -134,7 +134,7 @@ pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
 You should see something like this:
 ![Clustered dots](img/cls_euclidean.png)
 
-#### K-means, angular (cosine) distance
+#### K-means, angular (cosine) distance + average
 
 ```python
 import numpy
@@ -146,7 +146,9 @@ arr = numpy.empty((10000, 2), dtype=numpy.float32)
 angs = numpy.random.rand(10000) * 2 * numpy.pi
 for i in range(10000):
     arr[i] = numpy.sin(angs[i]), numpy.cos(angs[i])
-centroids, assignments = kmeans_cuda(arr, 4, metric="cos", verbosity=1, seed=3)
+centroids, assignments, avg_distance = kmeans_cuda(
+    arr, 4, metric="cos", verbosity=1, seed=3, average_distance=True)
+print("Average distance between centroids and members:", avg_distance)
 print(centroids)
 pyplot.scatter(arr[:, 0], arr[:, 1], c=assignments)
 pyplot.scatter(centroids[:, 0], centroids[:, 1], c="white", s=150)
@@ -192,7 +194,8 @@ Python API
 ----------
 ```python
 def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
-                yinyang_t=0.1, metric="L2", seed=time(), device=0, verbosity=0)
+                yinyang_t=0.1, metric="L2", average_distance=False,
+                seed=time(), device=0, verbosity=0)
 ```
 **samples** numpy array of shape \[number of samples, number of features\]
             or tuple(raw device pointer (int), device index (int), shape (tuple(number of samples, number of features\[, fp16x2 marker\]))).
@@ -212,9 +215,14 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 **yinyang_t** float, the relative number of cluster groups, usually 0.1.
 
 **metric** str, the name of the distance metric to use. The default is Euclidean (L2),
-                can be changed to "cos" to behave as Spherical K-means with the
-                angular distance. Please note that samples *must* be normalized in that
-                case.
+           can be changed to "cos" to behave as Spherical K-means with the
+           angular distance. Please note that samples *must* be normalized in that
+           case.
+
+**average_distance** boolean, the value indicating whether to calculate
+                     the average distance between cluster elements and
+                     the corresponding centroids. Useful for finding
+                     the best K. Returned as the third tuple element.
 
 **seed** integer, random generator seed for reproducible results.
 
@@ -276,7 +284,7 @@ KMCUDAResult kmeans_cuda(
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
-    uint32_t *assignments)
+    uint32_t *assignments, float *average_distance)
 ```
 **init** specifies the centroids initialization method: k-means++, random or import
          (in the latter case, **centroids** is read).
@@ -321,6 +329,9 @@ KMCUDAResult kmeans_cuda(
 
 **assignments** output array of cluster indices for each sample of size
                 samples_size x 1.
+
+**average_distance** output mean distance between cluster elements and
+                     the corresponding centroids. If nullptr, not calculated.
 
 Returns KMCUDAResult (see `kmcuda.h`);
 

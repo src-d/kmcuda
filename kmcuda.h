@@ -49,13 +49,15 @@ extern "C" {
 ///                  in row major format.
 /// @param assignments output array of cluster indices for each sample of size
 ///                    samples_size x 1.
+/// @param average_distance output mean distance between cluster elements and
+///                         the corresponding centroids. If nullptr, not calculated.
 /// @return KMCUDAResult.
 KMCUDAResult kmeans_cuda(
     KMCUDAInitMethod init, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
-    uint32_t *assignments);
+    uint32_t *assignments, float *average_distance);
 
 /// @brief Calculates K nearest neighbors for every sample using
 ///        the precalculated K-means clusters.

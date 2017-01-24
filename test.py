@@ -479,6 +479,23 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
 
+    def _test_average_distance(self, dev):
+        centroids, assignments, distance = kmeans_cuda(
+            self.samples, 50, init="kmeans++", device=dev,
+            verbosity=2, seed=3, tolerance=0.05, yinyang_t=0,
+            average_distance=True)
+        valid_dist = 0.0
+        for sample, ass in zip(self.samples, assignments):
+            valid_dist += numpy.linalg.norm(sample - centroids[ass])
+        valid_dist /= self.samples.shape[0]
+        self.assertLess(numpy.abs(valid_dist - distance), 1e-6)
+
+    def test_average_distance_single_dev(self):
+        self._test_average_distance(1)
+
+    def test_average_distance_multiple_dev(self):
+        self._test_average_distance(0)
+
 
 class KnnTests(unittest.TestCase):
     @classmethod

@@ -317,11 +317,12 @@ KMCUDAResult kmeans_cuda(
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
-    uint32_t *assignments) {
+    uint32_t *assignments, float *average_distance) {
   DEBUG("arguments: %d %.3f %.2f %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %"
-        PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p\n", init, tolerance,
+        PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p %p\n", init, tolerance,
         yinyang_t, metric, samples_size, features_size, clusters_size, seed,
-        device, fp16x2, verbosity, samples, centroids, assignments);
+        device, fp16x2, verbosity, samples, centroids, assignments,
+        average_distance);
   RETERR(check_kmeans_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
       device, fp16x2, verbosity, samples, centroids, assignments));
@@ -402,7 +403,13 @@ KMCUDAResult kmeans_cuda(
       metric, devs, fp16x2, verbosity, device_samples, &device_centroids, &device_ccounts,
       &device_assignments_prev, &device_assignments, &device_assignments_yy,
       &device_centroids_yy, &device_bounds_yy, &device_drifts_yy, &device_passed_yy),
-         DEBUG("kmeans_cuda_internal failed: %s\n", CUERRSTR()));
+         DEBUG("kmeans_cuda_yy failed: %s\n", CUERRSTR()));
+  if (average_distance) {
+    RETERR(kmeans_cuda_calc_average_distance(
+        samples_size, features_size, metric, devs, fp16x2, verbosity,
+        device_samples, device_centroids, device_assignments, average_distance),
+           DEBUG("kmeans_cuda_calc_average_distance failed: %s\n", CUERRSTR()));
+  }
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStop());
   #endif

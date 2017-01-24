@@ -45,11 +45,11 @@ __device__ __forceinline__ uint32_t atomicAggInc(uint32_t *ctr) {
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_plus_plus(
-    const uint32_t border, const uint32_t cc, const F *__restrict__ samples,
+    const uint32_t length, const uint32_t cc, const F *__restrict__ samples,
     const F *__restrict__ centroids, float *__restrict__ dists,
     float *__restrict__ dist_sums) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= length) {
     return;
   }
   samples += static_cast<uint64_t>(sample) * d_features_size;
@@ -67,8 +67,8 @@ __global__ void kmeans_plus_plus(
   }
   local_dists[threadIdx.x] = dist;
   uint32_t end = blockDim.x;
-  if ((blockIdx.x + 1) * blockDim.x > border) {
-    end = border - blockIdx.x * blockDim.x;
+  if ((blockIdx.x + 1) * blockDim.x > length) {
+    end = length - blockIdx.x * blockDim.x;
   }
   __syncthreads();
   if (threadIdx.x % 16 == 0) {
@@ -90,12 +90,12 @@ __global__ void kmeans_plus_plus(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_assign_lloyd_smallc(
-    const uint32_t border, const F *__restrict__ samples,
+    const uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
     uint32_t * __restrict__ assignments) {
   using HF = typename HALF<F>::type;
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= length) {
     return;
   }
   samples += static_cast<uint64_t>(sample) * d_features_size;
@@ -108,7 +108,7 @@ __global__ void kmeans_assign_lloyd_smallc(
       (d_features_size + 1);
   F *csqrs = shared_centroids + cstep * d_features_size;
   const uint32_t size_each = cstep /
-      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+      min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
   bool insane = _neq(samples[0], samples[0]);
   F ssqr = _const<F>(0);
   const uint32_t soffset = threadIdx.x * d_features_size;
@@ -168,12 +168,12 @@ __global__ void kmeans_assign_lloyd_smallc(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_assign_lloyd(
-    const uint32_t border, const F *__restrict__ samples,
+    const uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, uint32_t *__restrict__ assignments_prev,
     uint32_t * __restrict__ assignments) {
   using HF = typename HALF<F>::type;
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= length) {
     return;
   }
   samples += static_cast<uint64_t>(sample) * d_features_size;
@@ -184,7 +184,7 @@ __global__ void kmeans_assign_lloyd(
   const uint32_t cstep = d_shmem_size / (d_features_size + 1);
   F *csqrs = shared_centroids + cstep * d_features_size;
   const uint32_t size_each = cstep /
-      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+      min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
   bool insane = _neq(samples[0], samples[0]);
   F ssqr = _const<F>(0);
   if (!insane) {
@@ -243,13 +243,13 @@ __global__ void kmeans_assign_lloyd(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_adjust(
-    const uint32_t border, const uint32_t coffset,
+    const uint32_t coffset, const uint32_t length,
     const F *__restrict__ samples,
     const uint32_t *__restrict__ assignments_prev,
     const uint32_t *__restrict__ assignments,
     F *__restrict__ centroids, uint32_t *__restrict__ ccounts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
-  if (c >= border) {
+  if (c >= length) {
     return;
   }
   c += coffset;
@@ -308,11 +308,11 @@ __global__ void kmeans_adjust(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_init(
-    const uint32_t border, const F *__restrict__ samples,
+    const uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, const uint32_t *__restrict__ assignments,
     const uint32_t *__restrict__ groups, float *__restrict__ volatile bounds) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= length) {
     return;
   }
   bounds += static_cast<uint64_t>(sample) * (d_yy_groups_size + 1);
@@ -326,7 +326,7 @@ __global__ void kmeans_yy_init(
   F *volatile shared_centroids = reinterpret_cast<F*>(shared_memory);
   const uint32_t cstep = d_shmem_size / d_features_size;
   const uint32_t size_each = cstep /
-      min(blockDim.x, border - blockIdx.x * blockDim.x) + 1;
+      min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
     uint32_t coffset = gc * d_features_size;
@@ -365,10 +365,10 @@ __global__ void kmeans_yy_init(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_calc_drifts(
-    const uint32_t border, const uint32_t offset,
+    const uint32_t offset, const uint32_t length,
     const F *__restrict__ centroids, F *__restrict__ drifts) {
   uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
-  if (c >= border) {
+  if (c >= length) {
     return;
   }
   c += offset;
@@ -378,17 +378,17 @@ __global__ void kmeans_yy_calc_drifts(
 }
 
 __global__ void kmeans_yy_find_group_max_drifts(
-    const uint32_t border, const uint32_t offset,
+    const uint32_t offset, const uint32_t length,
     const uint32_t *__restrict__ groups, float *__restrict__ drifts) {
   uint32_t group = blockIdx.x * blockDim.x + threadIdx.x;
-  if (group >= border) {
+  if (group >= length) {
     return;
   }
   group += offset;
   const uint32_t doffset = d_clusters_size * d_features_size;
   const uint32_t step = d_shmem_size / 2;
   const uint32_t size_each = d_shmem_size /
-      (2 * min(blockDim.x, border - blockIdx.x * blockDim.x));
+      (2 * min(blockDim.x, length - blockIdx.x * blockDim.x));
   extern __shared__ uint32_t shmem[];
   float *cd = (float *)shmem;
   uint32_t *cg = shmem + step;
@@ -418,13 +418,13 @@ __global__ void kmeans_yy_find_group_max_drifts(
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_global_filter(
-    const uint32_t border, const F *__restrict__ samples,
+    const uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, const uint32_t *__restrict__ groups,
     const float *__restrict__ drifts, const uint32_t *__restrict__ assignments,
     uint32_t *__restrict__ assignments_prev, float *__restrict__ bounds,
     uint32_t *__restrict__ passed) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
-  if (sample >= border) {
+  if (sample >= length) {
     return;
   }
   bounds += static_cast<uint64_t>(sample) * (d_yy_groups_size + 1);
@@ -546,6 +546,30 @@ __global__ void kmeans_yy_local_filter(
   if (cluster != nearest) {
     assignments[sample] = nearest;
     atomicAggInc(&d_changed_number);
+  }
+}
+
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_calc_average_distance(
+    uint32_t offset, uint32_t length, const F *__restrict__ samples,
+    const F *__restrict__ centroids, const uint32_t *__restrict__ assignments,
+    float *distance) {
+  uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  float dist = 0;
+  if (sample < length) {
+    sample += offset;
+     dist = METRIC<M, F>::distance(
+         samples + sample * d_features_size,
+         centroids + assignments[sample] * d_features_size);
+  }
+  __shared__ float dists[BLOCK_SIZE];
+  dists[threadIdx.x] = dist;
+  if (threadIdx.x == 0) {
+    float sum = 0;
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+       sum += dists[i];
+    }
+    atomicAdd(distance, sum);
   }
 }
 
@@ -763,7 +787,7 @@ KMCUDAResult kmeans_cuda_lloyd(
       }
       dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
-          length, offset, reinterpret_cast<const F*>(samples[devi].get()),
+          offset, length, reinterpret_cast<const F*>(samples[devi].get()),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
           reinterpret_cast<F*>((*centroids)[devi].get()), (*ccounts)[devi].get()));
     );
@@ -917,7 +941,7 @@ KMCUDAResult kmeans_cuda_yy(
       }
       dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_adjust, <<<cgrid, cblock, shmem_sizes[devi]>>>(
-          length, offset, reinterpret_cast<const F*>(samples[devi].get()),
+          offset, length, reinterpret_cast<const F*>(samples[devi].get()),
           (*assignments_prev)[devi].get(), (*assignments)[devi].get(),
           reinterpret_cast<F*>((*centroids)[devi].get()), (*ccounts)[devi].get()));
     );
@@ -940,7 +964,7 @@ KMCUDAResult kmeans_cuda_yy(
       }
       dim3 cgrid(upper(length, cblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_yy_calc_drifts, <<<cgrid, cblock>>>(
-          length, offset, reinterpret_cast<const F*>((*centroids)[devi].get()),
+          offset, length, reinterpret_cast<const F*>((*centroids)[devi].get()),
           reinterpret_cast<F*>((*drifts_yy)[devi].get())));
     );
     FOR_EACH_DEVI(
@@ -961,7 +985,7 @@ KMCUDAResult kmeans_cuda_yy(
       }
       dim3 ggrid(upper(length, gblock.x), 1, 1);
       kmeans_yy_find_group_max_drifts<<<ggrid, gblock, shmem_sizes[devi]>>>(
-          length, offset, (*assignments_yy)[devi].get(),
+          offset, length, (*assignments_yy)[devi].get(),
           (*drifts_yy)[devi].get());
     );
     FOR_EACH_DEVI(
@@ -1013,4 +1037,39 @@ KMCUDAResult kmeans_cuda_yy(
     );
   }
 }
+
+KMCUDAResult kmeans_cuda_calc_average_distance(
+    uint32_t h_samples_size, uint16_t h_features_size,
+    KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
+    int32_t verbosity, const udevptrs<float> &samples,
+    const udevptrs<float> &centroids, const udevptrs<uint32_t> &assignments,
+    float *average_distance) {
+  INFO("calculating the average distance...\n");
+  auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
+  float *dev_dists[devs.size()];
+  FOR_EACH_DEVI(
+    uint32_t offset, length;
+    std::tie(offset, length) = plans[devi];
+    CUCH(cudaMalloc(&dev_dists[devi], sizeof(float)),
+         kmcudaMemoryAllocationFailure);
+    CUCH(cudaMemsetAsync(dev_dists[devi], 0, sizeof(float)),
+         kmcudaRuntimeError);
+    dim3 block(BLOCK_SIZE, 1, 1);
+    dim3 grid(upper(length, block.x), 1, 1);
+    KERNEL_SWITCH(kmeans_calc_average_distance, <<<grid, block>>>(
+        offset, length, reinterpret_cast<const F*>(samples[devi].get()),
+        reinterpret_cast<const F*>(centroids[devi].get()),
+        assignments[devi].get(), dev_dists[devi]));
+  );
+  float sum = 0;
+  FOR_EACH_DEVI(
+    float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi], sizeof(float), cudaMemcpyDeviceToHost),
+         kmcudaMemoryCopyError);
+    sum += hdist;
+  );
+  *average_distance = sum / h_samples_size;
+  return kmcudaSuccess;
+}
+
 }  // extern "C"
