@@ -172,17 +172,18 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
            device = 0;
   int32_t verbosity = 0;
   bool fp16x2 = false;
+  int adflag = 0;
   float tolerance = .01, yinyang_t = .1;
   PyObject *samples_obj, *init_obj = Py_None, *metric_obj = Py_None;
   static const char *kwlist[] = {
-      "samples", "clusters", "tolerance", "init", "yinyang_t", "metric", "seed",
-      "device", "verbosity", NULL};
+      "samples", "clusters", "tolerance", "init", "yinyang_t", "metric",
+      "average_distance", "seed", "device", "verbosity", NULL};
 
   /* Parse the input tuple */
   if (!PyArg_ParseTupleAndKeywords(
-      args, kwargs, "OI|fOfOIIi", const_cast<char**>(kwlist), &samples_obj,
-      &clusters_size, &tolerance, &init_obj, &yinyang_t, &metric_obj, &seed,
-      &device, &verbosity)) {
+      args, kwargs, "OI|fOfOpIIi", const_cast<char**>(kwlist), &samples_obj,
+      &clusters_size, &tolerance, &init_obj, &yinyang_t, &metric_obj, &adflag,
+      &seed, &device, &verbosity)) {
     return NULL;
   }
 
@@ -340,12 +341,14 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       }
     }
   }
+  float average_distance = 0;
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
       init, tolerance, yinyang_t, metric, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
-      device_ptrs, fp16x2, verbosity, samples, centroids, assignments);
+      device_ptrs, fp16x2, verbosity, samples, centroids, assignments,
+      adflag? &average_distance : nullptr);
   Py_END_ALLOW_THREADS
 
   switch (result) {
@@ -367,12 +370,27 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
       return NULL;
     case kmcudaSuccess:
       if (device_ptrs < 0) {
-        return Py_BuildValue("OO", centroids_array.get(), assignments_array.get());
+        if (!adflag) {
+          return Py_BuildValue(
+              "OO", centroids_array.get(), assignments_array.get());
+        } else {
+          return Py_BuildValue(
+              "OOf", centroids_array.get(), assignments_array.get(),
+              average_distance);
+        }
       }
-      return Py_BuildValue(
-          "KK",
-          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(centroids)),
-          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(assignments)));
+      if (!adflag) {
+        return Py_BuildValue(
+            "KK",
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(centroids)),
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(assignments)));
+      } else {
+        return Py_BuildValue(
+            "KKf",
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(centroids)),
+            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(assignments)),
+            average_distance);
+      }
     default:
       PyErr_SetString(PyExc_AssertionError,
                       "Unknown error code returned from kmeans_cuda");
