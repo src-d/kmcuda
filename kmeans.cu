@@ -13,6 +13,7 @@
 
 #define BS_KMPP 1024
 #define BS_AFKMC2_Q 512
+#define BS_AFKMC2_R 512
 #define BS_LL_ASS 256
 #define BS_LL_CNT 256
 #define BS_YY_INI 256
@@ -100,15 +101,15 @@ __global__ void kmeans_afkmc2_calc_q(
   q[sample] = 1 / (2.f * d_samples_size) + q[sample] / (2 * dsum);
 }
 
-__global__ void kmeans_cuda_afkmc2_random_step(
-    const uint32_t length, const uint64_t seed, const uint64_t seq,
+__global__ void kmeans_afkmc2_random_step(
+    const uint32_t m, const uint64_t seed, const uint64_t seq,
     const float *__restrict__ q, uint32_t *__restrict__ choices,
     float *__restrict__ samples) {
   volatile uint32_t ti = blockIdx.x * blockDim.x + threadIdx.x;
   curandState_t state;
   curand_init(seed, ti, seq, &state);
   float part = curand_uniform(&state);
-  if (ti < length) {
+  if (ti < m) {
     samples[ti] = curand_uniform(&state);
   }
   float accum = 0, corr = 0;
@@ -140,7 +141,7 @@ __global__ void kmeans_cuda_afkmc2_random_step(
         accum = t;
       }
       if (accum >= part) {
-        if (ti < length) {
+        if (ti < m) {
           choices[ti] = sample + i;
         }
         found = true;
@@ -148,6 +149,27 @@ __global__ void kmeans_cuda_afkmc2_random_step(
       }
     }
   }
+}
+
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_afkmc2_min_dist(
+    const uint32_t m, const uint32_t k, const F *__restrict__ samples,
+    const uint32_t *__restrict__ choices, const F *__restrict__ centroids,
+    float *__restrict__ min_dists) {
+  uint32_t chi = blockIdx.x * blockDim.x + threadIdx.x;
+  if (chi >= m) {
+    return;
+  }
+  float min_dist = FLT_MAX;
+  for (uint32_t c = 0; c < k; c++) {
+    float dist = METRIC<M, F>::distance(
+        samples + static_cast<uint64_t>(choices[chi]) * d_features_size,
+        centroids + c * d_features_size);
+    if (dist < min_dist) {
+      min_dist = dist;
+    }
+  }
+  min_dists[chi] = min_dist * min_dist;
 }
 
 template <KMCUDADistanceMetric M, typename F>
@@ -824,12 +846,37 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
   return kmcudaSuccess;
 }
 
-/*void func() {
-  kmeans_cuda_afkmc2_random_step(
-    const uint32_t length, const uint64_t seed, const uint64_t seq,
-    const float *__restrict__ q, uint32_t *__restrict__ choices,
-    float *__restrict__ samples)
-}*/
+KMCUDAResult kmeans_cuda_afkmc2_random_step(
+    uint32_t k, uint32_t m, uint64_t seed, int verbosity, const float *q,
+    uint32_t *d_choices, uint32_t *h_choices, float *d_samples, float *h_samples) {
+  dim3 block(BS_AFKMC2_R, 1, 1);
+  dim3 grid(upper(m, block.x), 1, 1);
+  int shmem = (SHMEM_AFKMC2_RC + 1) * sizeof(float);
+  kmeans_afkmc2_random_step<<<grid, block, shmem>>>(
+      m, seed, k, q, d_choices, d_samples);
+  CUCH(cudaMemcpy(h_choices, d_choices, m * sizeof(uint32_t),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
+  CUCH(cudaMemcpy(h_samples, d_samples, m * sizeof(float),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
+  return kmcudaSuccess;
+}
+
+KMCUDAResult kmeans_cuda_afkmc2_min_dist(
+    const uint32_t m, const uint32_t k, KMCUDADistanceMetric metric,
+    int fp16x2, int32_t verbosity, const float *samples, const uint32_t *choices,
+    const float *centroids, float *d_min_dists, float *h_min_dists) {
+  dim3 block(BLOCK_SIZE, 1, 1);
+  dim3 grid(upper(m, block.x), 1, 1);
+  KERNEL_SWITCH(kmeans_afkmc2_min_dist, <<<grid, block>>>(
+      m, k, reinterpret_cast<const F*>(samples), choices,
+      reinterpret_cast<const F*>(centroids), d_min_dists));
+  CUCH(cudaMemcpy(h_min_dists, d_min_dists, m * sizeof(float),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
+  return kmcudaSuccess;
+}
 
 KMCUDAResult kmeans_cuda_lloyd(
     float tolerance, uint32_t h_samples_size, uint32_t h_clusters_size,
@@ -979,7 +1026,7 @@ KMCUDAResult kmeans_cuda_yy(
     RETERR(kmeans_init_centroids(
         kmcudaInitMethodPlusPlus, nullptr, h_clusters_size, h_features_size,
         h_yy_groups_size, metric, 0, devs, -1, fp16x2, verbosity, nullptr,
-        *centroids, &tmpbufs, centroids_yy),
+        *centroids, &tmpbufs, nullptr, centroids_yy),
            INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
                 cudaGetErrorString(cudaGetLastError())));
     RETERR(kmeans_cuda_lloyd(

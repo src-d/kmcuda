@@ -261,6 +261,15 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *q);
 
+KMCUDAResult kmeans_cuda_afkmc2_random_step(
+    uint32_t k, uint32_t m, uint64_t seed, int verbosity, const float *q,
+    uint32_t *d_choices, uint32_t *h_choices, float *d_samples, float *h_samples);
+
+KMCUDAResult kmeans_cuda_afkmc2_min_dist(
+    const uint32_t m, const uint32_t k, KMCUDADistanceMetric metric,
+    int fp16x2, int32_t verbosity, const float *samples, const uint32_t *choices,
+    const float *centroids, float *d_min_dists, float *h_min_dists);
+
 KMCUDAResult kmeans_cuda_setup(
     uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
     uint32_t yy_groups_size, const std::vector<int> &devs, int32_t verbosity);
@@ -270,7 +279,7 @@ KMCUDAResult kmeans_init_centroids(
     uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
     uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
     int32_t verbosity, const float *host_centroids,  const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *centroids);
+    udevptrs<float> *dists, udevptrs<float> *aux, udevptrs<float> *centroids);
 
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yy_groups_size, uint32_t samples_size,

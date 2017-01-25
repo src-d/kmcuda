@@ -9,7 +9,6 @@
 #include <memory>
 
 #include <cuda_runtime_api.h>
-#include <curand.h>
 #ifdef PROFILE
 #include <cuda_profiler_api.h>
 #endif
@@ -189,45 +188,12 @@ static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
 
 extern "C" {
 
-static const std::map<curandStatus, const char*> CURAND_ERRORS {
-    {CURAND_STATUS_SUCCESS, "CURAND_STATUS_SUCCESS"},
-    {CURAND_STATUS_VERSION_MISMATCH, "CURAND_STATUS_VERSION_MISMATCH"},
-    {CURAND_STATUS_NOT_INITIALIZED, "CURAND_STATUS_NOT_INITIALIZED"},
-    {CURAND_STATUS_ALLOCATION_FAILED, "CURAND_STATUS_ALLOCATION_FAILED"},
-    {CURAND_STATUS_TYPE_ERROR, "CURAND_STATUS_TYPE_ERROR"},
-    {CURAND_STATUS_OUT_OF_RANGE, "CURAND_STATUS_OUT_OF_RANGE"},
-    {CURAND_STATUS_LENGTH_NOT_MULTIPLE, "CURAND_STATUS_LENGTH_NOT_MULTIPLE"},
-    {CURAND_STATUS_DOUBLE_PRECISION_REQUIRED, "CURAND_STATUS_DOUBLE_PRECISION_REQUIRED"},
-    {CURAND_STATUS_LAUNCH_FAILURE, "CURAND_STATUS_LAUNCH_FAILURE"},
-    {CURAND_STATUS_PREEXISTING_FAILURE, "CURAND_STATUS_PREEXISTING_FAILURE"},
-    {CURAND_STATUS_INITIALIZATION_FAILED, "CURAND_STATUS_INITIALIZATION_FAILED"},
-    {CURAND_STATUS_ARCH_MISMATCH, "CURAND_STATUS_ARCH_MISMATCH"},
-    {CURAND_STATUS_INTERNAL_ERROR, "CURAND_STATUS_INTERNAL_ERROR"}
-};
-
-#define CURANDCH(cuda_call, ret, ...) \
-do { \
-  auto __res = cuda_call; \
-  if (__res != CURAND_STATUS_SUCCESS) { \
-    DEBUG("%s\n", #cuda_call); \
-    INFO("%s:%d -> %s\n", __FILE__, __LINE__, CURAND_ERRORS.find(__res)->second); \
-    __VA_ARGS__; \
-    return ret; \
-  } \
-} while (false)
-
-class CurandGenerator : public unique_devptr_parent<curandGenerator_st> {
- public:
-  explicit CurandGenerator(curandGenerator_t ptr) : unique_devptr_parent<curandGenerator_st>(
-      ptr, [](curandGenerator_t p){ curandDestroyGenerator(p); }) {}
-};
-
 KMCUDAResult kmeans_init_centroids(
     KMCUDAInitMethod method, const void *init_params, uint32_t samples_size,
     uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
     uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
     int32_t verbosity, const float *host_centroids, const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *centroids) {
+    udevptrs<float> *dists, udevptrs<float> *aux, udevptrs<float> *centroids) {
   srand(seed);
   switch (method) {
     case kmcudaInitMethodImport:
@@ -343,12 +309,14 @@ KMCUDAResult kmeans_init_centroids(
       break;
     }
     case kmcudaInitMethodAFKMC2: {
-      curandGenerator_t rndgen_;
-      CURANDCH(curandCreateGenerator(&rndgen_, CURAND_RNG_PSEUDO_DEFAULT),
-               kmcudaRuntimeError);
-      CurandGenerator rndgen(rndgen_);
-      CURANDCH(curandSetPseudoRandomGeneratorSeed(rndgen.get(), seed),
-               kmcudaRuntimeError);
+      uint32_t m = *reinterpret_cast<const uint32_t*>(init_params);
+      if (m == 0) {
+        m = 200;
+      } else if (m > samples_size / 2) {
+        INFO("afkmc2: m > %" PRIu32 " is not supported (got %" PRIu32 ")\n",
+             samples_size / 2, m);
+        return kmcudaInvalidArguments;
+      }
       float smoke = NAN;
       uint32_t first_offset;
       while (smoke != smoke) {
@@ -365,11 +333,19 @@ KMCUDAResult kmeans_init_centroids(
           samples_size, features_size, first_offset / features_size, metric,
           devs, fp16x2, verbosity, samples, q);
       INFO("done\n");
-
-      kmeans_init_centroids(
-          kmcudaInitMethodPlusPlus, init_params, samples_size, features_size, clusters_size,
-          metric, seed, devs, device_ptrs, fp16x2, verbosity, host_centroids,
-          samples, dists, centroids);
+      auto choices = std::unique_ptr<uint32_t[]>(new uint32_t[m]);
+      auto random_samples = std::unique_ptr<float[]>(new float[m]);
+      auto min_dists = std::unique_ptr<float[]>(new float[m]);
+      for (uint32_t k = 1; k < clusters_size; k++) {
+        RETERR(kmeans_cuda_afkmc2_random_step(
+            k, m, seed, verbosity, q->back().get(),
+            reinterpret_cast<uint32_t*>(aux->back().get()),
+            choices.get(), aux->back().get() + m, random_samples.get()));
+        RETERR(kmeans_cuda_afkmc2_min_dist(
+            m, k, metric, fp16x2, verbosity, samples.back().get(),
+            reinterpret_cast<uint32_t*>(aux->back().get()),
+            centroids->back().get(), aux->back().get() + m, min_dists.get()));
+      }
       break;
     }
   }
@@ -460,6 +436,7 @@ KMCUDAResult kmeans_cuda(
       init, init_params, samples_size, features_size, clusters_size, metric,
       seed, devs, device_ptrs, fp16x2, verbosity, centroids, device_samples,
       reinterpret_cast<udevptrs<float>*>(&device_assignments),
+      reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
       &device_centroids),
          DEBUG("kmeans_init_centroids failed: %s\n", CUERRSTR()));
   RETERR(kmeans_cuda_yy(
