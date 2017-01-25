@@ -262,10 +262,10 @@ KMCUDAResult kmeans_cuda_setup(
     uint32_t yy_groups_size, const std::vector<int> &devs, int32_t verbosity);
 
 KMCUDAResult kmeans_init_centroids(
-    KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, KMCUDADistanceMetric metric, uint32_t seed,
-    const std::vector<int> &devs, int device_ptrs, int fp16x2, int32_t verbosity,
-    const float *host_centroids,  const udevptrs<float> &samples,
+    KMCUDAInitMethod method, void *init_params, uint32_t samples_size,
+    uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
+    uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
+    int32_t verbosity, const float *host_centroids,  const udevptrs<float> &samples,
     udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids);
 
 KMCUDAResult kmeans_cuda_yy(

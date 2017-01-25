@@ -15,6 +15,7 @@ enum KMCUDAResult {
 enum KMCUDAInitMethod {
   kmcudaInitMethodRandom = 0,
   kmcudaInitMethodPlusPlus,
+  kmcudaInitMethodAFKMC2,
   kmcudaInitMethodImport
 };
 
@@ -27,6 +28,10 @@ extern "C" {
 
 /// @brief Performs K-means clustering on GPU / CUDA.
 /// @param init centroids initialization method.
+/// @param init_params pointer to a struct / number with centroid initialization
+///                    parameters. Ignored unless init == kmcudaInitMethodAFKMC2.
+///                    In case with kmcudaInitMethodAFKMC2 it is expected to be
+///                    uint32_t* to m; m == 0 means the default value (200).
 /// @param tolerance if the number of reassignments drop below this ratio, stop.
 /// @param yinyang_t the relative number of cluster groups, usually 0.1.
 /// @param metric the distance metric to use. The default is Euclidean (L2), can be
@@ -53,7 +58,7 @@ extern "C" {
 ///                         the corresponding centroids. If nullptr, not calculated.
 /// @return KMCUDAResult.
 KMCUDAResult kmeans_cuda(
-    KMCUDAInitMethod init, float tolerance, float yinyang_t,
+    KMCUDAInitMethod init, void *init_params, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,

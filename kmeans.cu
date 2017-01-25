@@ -857,9 +857,9 @@ KMCUDAResult kmeans_cuda_yy(
       tmpbufs2.emplace_back(tmpbufs.back().get() + h_clusters_size, true);
     }
     RETERR(kmeans_init_centroids(
-        kmcudaInitMethodPlusPlus, h_clusters_size, h_features_size, h_yy_groups_size,
-        metric, 0, devs, -1, fp16x2, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy,
-        centroids_yy),
+        kmcudaInitMethodPlusPlus, nullptr, h_clusters_size, h_features_size,
+        h_yy_groups_size, metric, 0, devs, -1, fp16x2, verbosity, nullptr,
+        *centroids, &tmpbufs, drifts_yy, centroids_yy),
            INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
                 cudaGetErrorString(cudaGetLastError())));
     RETERR(kmeans_cuda_lloyd(

@@ -189,10 +189,10 @@ static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
 extern "C" {
 
 KMCUDAResult kmeans_init_centroids(
-    KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, KMCUDADistanceMetric metric, uint32_t seed,
-    const std::vector<int> &devs, int device_ptrs, int fp16x2, int32_t verbosity,
-    const float *host_centroids, const udevptrs<float> &samples,
+    KMCUDAInitMethod method, void *init_params, uint32_t samples_size,
+    uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
+    uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
+    int32_t verbosity, const float *host_centroids, const udevptrs<float> &samples,
     udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids) {
   srand(seed);
   switch (method) {
@@ -237,7 +237,7 @@ KMCUDAResult kmeans_init_centroids(
       );
       break;
     }
-    case kmcudaInitMethodPlusPlus:
+    case kmcudaInitMethodPlusPlus: {
       INFO("performing kmeans++...\n");
       float smoke = NAN;
       uint32_t first_offset;
@@ -307,13 +307,17 @@ KMCUDAResult kmeans_init_centroids(
                            (j - 1) * features_size, features_size);
       }
       break;
+    }
+    case kmcudaInitMethodAFKMC2: {
+      break;
+    }
   }
   INFO("\rdone            \n");
   return kmcudaSuccess;
 }
 
 KMCUDAResult kmeans_cuda(
-    KMCUDAInitMethod init, float tolerance, float yinyang_t,
+    KMCUDAInitMethod init, void *init_params, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
@@ -392,8 +396,8 @@ KMCUDAResult kmeans_cuda(
   FOR_EACH_DEV(cudaProfilerStart());
   #endif
   RETERR(kmeans_init_centroids(
-      init, samples_size, features_size, clusters_size, metric, seed, devs,
-      device_ptrs, fp16x2, verbosity, centroids, device_samples,
+      init, init_params, samples_size, features_size, clusters_size, metric,
+      seed, devs, device_ptrs, fp16x2, verbosity, centroids, device_samples,
       reinterpret_cast<udevptrs<float>*>(&device_assignments),
       reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
       &device_centroids),
