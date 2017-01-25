@@ -58,7 +58,7 @@ extern "C" {
 ///                         the corresponding centroids. If nullptr, not calculated.
 /// @return KMCUDAResult.
 KMCUDAResult kmeans_cuda(
-    KMCUDAInitMethod init, void *init_params, float tolerance, float yinyang_t,
+    KMCUDAInitMethod init, const void *init_params, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,

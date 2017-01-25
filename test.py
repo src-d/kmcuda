@@ -236,6 +236,14 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(self._get_iters_number(self.stdout), 8)
         self._validate(centroids, assignments, 0.05)
 
+    def test_afkmc2_lloyd(self):
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                self.samples, 50, init=("afkmc2", 200), device=0,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(self._get_iters_number(self.stdout), 4)
+        self._validate(centroids, assignments, 0.05)
+
     def test_random_lloyd_2gpus(self):
         with self.stdout:
             centroids, assignments = kmeans_cuda(

@@ -2,13 +2,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <cinttypes>
-#include <cfloat>
 #include <cmath>
 #include <cassert>
 #include <algorithm>
+#include <map>
 #include <memory>
 
 #include <cuda_runtime_api.h>
+#include <curand.h>
 #ifdef PROFILE
 #include <cuda_profiler_api.h>
 #endif
@@ -188,12 +189,45 @@ static KMCUDAResult print_memory_stats(const std::vector<int> &devs) {
 
 extern "C" {
 
+static const std::map<curandStatus, const char*> CURAND_ERRORS {
+    {CURAND_STATUS_SUCCESS, "CURAND_STATUS_SUCCESS"},
+    {CURAND_STATUS_VERSION_MISMATCH, "CURAND_STATUS_VERSION_MISMATCH"},
+    {CURAND_STATUS_NOT_INITIALIZED, "CURAND_STATUS_NOT_INITIALIZED"},
+    {CURAND_STATUS_ALLOCATION_FAILED, "CURAND_STATUS_ALLOCATION_FAILED"},
+    {CURAND_STATUS_TYPE_ERROR, "CURAND_STATUS_TYPE_ERROR"},
+    {CURAND_STATUS_OUT_OF_RANGE, "CURAND_STATUS_OUT_OF_RANGE"},
+    {CURAND_STATUS_LENGTH_NOT_MULTIPLE, "CURAND_STATUS_LENGTH_NOT_MULTIPLE"},
+    {CURAND_STATUS_DOUBLE_PRECISION_REQUIRED, "CURAND_STATUS_DOUBLE_PRECISION_REQUIRED"},
+    {CURAND_STATUS_LAUNCH_FAILURE, "CURAND_STATUS_LAUNCH_FAILURE"},
+    {CURAND_STATUS_PREEXISTING_FAILURE, "CURAND_STATUS_PREEXISTING_FAILURE"},
+    {CURAND_STATUS_INITIALIZATION_FAILED, "CURAND_STATUS_INITIALIZATION_FAILED"},
+    {CURAND_STATUS_ARCH_MISMATCH, "CURAND_STATUS_ARCH_MISMATCH"},
+    {CURAND_STATUS_INTERNAL_ERROR, "CURAND_STATUS_INTERNAL_ERROR"}
+};
+
+#define CURANDCH(cuda_call, ret, ...) \
+do { \
+  auto __res = cuda_call; \
+  if (__res != CURAND_STATUS_SUCCESS) { \
+    DEBUG("%s\n", #cuda_call); \
+    INFO("%s:%d -> %s\n", __FILE__, __LINE__, CURAND_ERRORS.find(__res)->second); \
+    __VA_ARGS__; \
+    return ret; \
+  } \
+} while (false)
+
+class CurandGenerator : public unique_devptr_parent<curandGenerator_st> {
+ public:
+  explicit CurandGenerator(curandGenerator_t ptr) : unique_devptr_parent<curandGenerator_st>(
+      ptr, [](curandGenerator_t p){ curandDestroyGenerator(p); }) {}
+};
+
 KMCUDAResult kmeans_init_centroids(
-    KMCUDAInitMethod method, void *init_params, uint32_t samples_size,
+    KMCUDAInitMethod method, const void *init_params, uint32_t samples_size,
     uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
     uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
     int32_t verbosity, const float *host_centroids, const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids) {
+    udevptrs<float> *dists, udevptrs<float> *centroids) {
   srand(seed);
   switch (method) {
     case kmcudaInitMethodImport:
@@ -253,9 +287,9 @@ KMCUDAResult kmeans_init_centroids(
         printf("kmeans++: dump %" PRIu32 " %" PRIu32 " %p\n",
                samples_size, features_size, host_dists.get());
         FOR_EACH_DEVI(
-          printf("kmeans++: dev #%d: %p %p %p %p\n", devs[devi],
+          printf("kmeans++: dev #%d: %p %p %p\n", devs[devi],
                  samples[devi].get(), (*centroids)[devi].get(),
-                 (*dists)[devi].get(), (*dev_sums)[devi].get());
+                 (*dists)[devi].get());
         );
       }
       for (uint32_t i = 1; i < clusters_size; i++) {
@@ -267,7 +301,7 @@ KMCUDAResult kmeans_init_centroids(
         float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
             samples_size, features_size, i, metric, devs, fp16x2, verbosity,
-            samples, centroids, dists, dev_sums, host_dists.get(), &dist_sum),
+            samples, centroids, dists, host_dists.get(), &dist_sum),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         if (dist_sum != dist_sum) {
           assert(dist_sum == dist_sum);
@@ -309,6 +343,33 @@ KMCUDAResult kmeans_init_centroids(
       break;
     }
     case kmcudaInitMethodAFKMC2: {
+      curandGenerator_t rndgen_;
+      CURANDCH(curandCreateGenerator(&rndgen_, CURAND_RNG_PSEUDO_DEFAULT),
+               kmcudaRuntimeError);
+      CurandGenerator rndgen(rndgen_);
+      CURANDCH(curandSetPseudoRandomGeneratorSeed(rndgen.get(), seed),
+               kmcudaRuntimeError);
+      float smoke = NAN;
+      uint32_t first_offset;
+      while (smoke != smoke) {
+        first_offset = (rand() % samples_size) * features_size;
+        cudaSetDevice(devs[0]);
+        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_offset, sizeof(float),
+                        cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
+      }
+      INFO("afkmc2: calculating q (c0 = %" PRIu32 ")... ",
+           first_offset / features_size);
+      CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
+      auto q = dists;
+      kmeans_cuda_afkmc2_calc_q(
+          samples_size, features_size, first_offset / features_size, metric,
+          devs, fp16x2, verbosity, samples, q);
+      INFO("done\n");
+
+      kmeans_init_centroids(
+          kmcudaInitMethodPlusPlus, init_params, samples_size, features_size, clusters_size,
+          metric, seed, devs, device_ptrs, fp16x2, verbosity, host_centroids,
+          samples, dists, centroids);
       break;
     }
   }
@@ -317,15 +378,15 @@ KMCUDAResult kmeans_init_centroids(
 }
 
 KMCUDAResult kmeans_cuda(
-    KMCUDAInitMethod init, void *init_params, float tolerance, float yinyang_t,
+    KMCUDAInitMethod init, const void *init_params, float tolerance, float yinyang_t,
     KMCUDADistanceMetric metric, uint32_t samples_size, uint16_t features_size,
     uint32_t clusters_size, uint32_t seed, uint32_t device, int32_t device_ptrs,
     int32_t fp16x2, int32_t verbosity, const float *samples, float *centroids,
     uint32_t *assignments, float *average_distance) {
-  DEBUG("arguments: %d %.3f %.2f %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %"
-        PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p %p\n", init, tolerance,
-        yinyang_t, metric, samples_size, features_size, clusters_size, seed,
-        device, fp16x2, verbosity, samples, centroids, assignments,
+  DEBUG("arguments: %d %p %.3f %.2f %d %" PRIu32 " %" PRIu16 " %" PRIu32 " %"
+        PRIu32 " %" PRIu32 " %d %" PRIi32 " %p %p %p %p\n", init, init_params,
+        tolerance, yinyang_t, metric, samples_size, features_size, clusters_size,
+        seed, device, fp16x2, verbosity, samples, centroids, assignments,
         average_distance);
   RETERR(check_kmeans_args(
       tolerance, yinyang_t, samples_size, features_size, clusters_size,
@@ -399,7 +460,6 @@ KMCUDAResult kmeans_cuda(
       init, init_params, samples_size, features_size, clusters_size, metric,
       seed, devs, device_ptrs, fp16x2, verbosity, centroids, device_samples,
       reinterpret_cast<udevptrs<float>*>(&device_assignments),
-      reinterpret_cast<udevptrs<float>*>(&device_assignments_prev),
       &device_centroids),
          DEBUG("kmeans_init_centroids failed: %s\n", CUERRSTR()));
   RETERR(kmeans_cuda_yy(
