@@ -30,11 +30,11 @@ __global__ void knn_calc_cluster_radiuses(
 
   // stage 1 - accumulate partial distances for every sample
   __shared__ F shcents[CLUSTER_RADIUSES_SHMEM];
-  volatile const int cent_step = dmin(
+  volatile const int cent_step = min(
       CLUSTER_RADIUSES_SHMEM / blockDim.x, static_cast<unsigned>(d_features_size));
   F *volatile const my_cent = shcents + cent_step * threadIdx.x;
   for (int cfi = 0; cfi < d_features_size; cfi += cent_step) {
-    const int fsize = dmin(cent_step, d_features_size - cfi);
+    const int fsize = min(cent_step, d_features_size - cfi);
     for (int f = 0; f < fsize; f++) {
       my_cent[f] = centroids[ci * d_features_size + cfi + f];
     }
@@ -78,7 +78,7 @@ __global__ void knn_calc_cluster_distances(
   // stage 1 - accumulate distances
   for (uint16_t fpos = 0; fpos < d_features_size; fpos += fstep) {
     __syncthreads();
-    const uint16_t fsize = dmin(
+    const uint16_t fsize = min(
         fstep, static_cast<uint32_t>(d_features_size - fpos));
     uint32_t cbase = x * bs + threadIdx.x;
     if (cbase < d_clusters_size) {

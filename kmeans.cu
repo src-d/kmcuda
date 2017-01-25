@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <memory>
 
+#include <curand_kernel.h>
+
 #include "private.h"
 #include "metric_abstraction.h"
 #include "tricks.cuh"
@@ -17,6 +19,7 @@
 #define BS_YY_GFL 512
 #define BS_YY_LFL 512
 #define BLOCK_SIZE 1024  // for all the rest of the kernels
+#define SHMEM_AFKMC2_RC 8191  // in float-s, the actual value is +1
 
 #define YINYANG_GROUP_TOLERANCE 0.02
 #define YINYANG_DRAFT_REASSIGNMENTS 0.11
@@ -95,6 +98,56 @@ __global__ void kmeans_afkmc2_calc_q(
   }
   sample += offset;
   q[sample] = 1 / (2.f * d_samples_size) + q[sample] / (2 * dsum);
+}
+
+__global__ void kmeans_cuda_afkmc2_random_step(
+    const uint32_t length, const uint64_t seed, const uint64_t seq,
+    const float *__restrict__ q, uint32_t *__restrict__ choices,
+    float *__restrict__ samples) {
+  volatile uint32_t ti = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t state;
+  curand_init(seed, ti, seq, &state);
+  float part = curand_uniform(&state);
+  if (ti < length) {
+    samples[ti] = curand_uniform(&state);
+  }
+  float accum = 0, corr = 0;
+  bool found = false;
+  __shared__ float shared_q[SHMEM_AFKMC2_RC + 1];
+  int32_t *all_found = reinterpret_cast<int32_t*>(shared_q + SHMEM_AFKMC2_RC);
+  const uint32_t size_each = dupper(
+      static_cast<unsigned>(SHMEM_AFKMC2_RC), blockDim.x);
+  for (uint32_t sample = 0; sample < d_samples_size; sample += SHMEM_AFKMC2_RC) {
+    __syncthreads();
+    if (*all_found == 0) {
+      return;
+    }
+    for (uint32_t i = 0;
+         i < size_each && threadIdx.x * size_each + i < SHMEM_AFKMC2_RC;
+         i++) {
+      shared_q[threadIdx.x * size_each + i] = q[sample + threadIdx.x * size_each + i];
+    }
+    __syncthreads();
+    if (!found) {
+      int i = 0;
+      #pragma unroll 4
+      for (; i < SHMEM_AFKMC2_RC && accum < part; i++) {
+        // Kahan summation with inverted c
+        float v = shared_q[i++];
+        float y = _add(corr, v);
+        float t = accum + y;
+        corr = y - (t - accum);
+        accum = t;
+      }
+      if (accum >= part) {
+        if (ti < length) {
+          choices[ti] = sample + i;
+        }
+        found = true;
+        atomicSub(all_found, 1);
+      }
+    }
+  }
 }
 
 template <KMCUDADistanceMetric M, typename F>
@@ -768,9 +821,15 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
       CUP2P(q, offset, length);
     );
   );
-
   return kmcudaSuccess;
 }
+
+/*void func() {
+  kmeans_cuda_afkmc2_random_step(
+    const uint32_t length, const uint64_t seed, const uint64_t seq,
+    const float *__restrict__ q, uint32_t *__restrict__ choices,
+    float *__restrict__ samples)
+}*/
 
 KMCUDAResult kmeans_cuda_lloyd(
     float tolerance, uint32_t h_samples_size, uint32_t h_clusters_size,

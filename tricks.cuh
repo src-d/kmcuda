@@ -7,10 +7,10 @@ __device__ __forceinline__ T dupper(T size, T each) {
   return div + 1;
 }
 
-template <typename T>
+/*template <typename T>
 __device__ __forceinline__ T dmin(T a, T b) {
   return a <= b? a : b;
-}
+}*/
 
 // https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
 __device__ __forceinline__ uint32_t atomicAggInc(uint32_t *ctr) {
