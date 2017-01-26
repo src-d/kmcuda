@@ -254,19 +254,33 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums, float *host_dists,
-    float *dists_sum);
+    udevptrs<float> *dists, float *host_dists, float *dists_sum);
+
+KMCUDAResult kmeans_cuda_afkmc2_calc_q(
+    uint32_t samples_size, uint32_t features_size, uint32_t firstc,
+    KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
+    int verbosity, const udevptrs<float> &samples, udevptrs<float> *d_q,
+    float *h_q);
+
+KMCUDAResult kmeans_cuda_afkmc2_random_step(
+    uint32_t k, uint32_t m, uint64_t seed, int verbosity, const float *q,
+    uint32_t *d_choices, uint32_t *h_choices, float *d_samples, float *h_samples);
+
+KMCUDAResult kmeans_cuda_afkmc2_min_dist(
+    uint32_t k, uint32_t m, KMCUDADistanceMetric metric, int fp16x2,
+    int32_t verbosity, const float *samples, const uint32_t *choices,
+    const float *centroids, float *d_min_dists, float *h_min_dists);
 
 KMCUDAResult kmeans_cuda_setup(
     uint32_t samples_size, uint16_t features_size, uint32_t clusters_size,
     uint32_t yy_groups_size, const std::vector<int> &devs, int32_t verbosity);
 
 KMCUDAResult kmeans_init_centroids(
-    KMCUDAInitMethod method, uint32_t samples_size, uint16_t features_size,
-    uint32_t clusters_size, KMCUDADistanceMetric metric, uint32_t seed,
-    const std::vector<int> &devs, int device_ptrs, int fp16x2, int32_t verbosity,
-    const float *host_centroids,  const udevptrs<float> &samples,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums, udevptrs<float> *centroids);
+    KMCUDAInitMethod method, const void *init_params, uint32_t samples_size,
+    uint16_t features_size, uint32_t clusters_size, KMCUDADistanceMetric metric,
+    uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
+    int32_t verbosity, const float *host_centroids,  const udevptrs<float> &samples,
+    udevptrs<float> *dists, udevptrs<float> *aux, udevptrs<float> *centroids);
 
 KMCUDAResult kmeans_cuda_yy(
     float tolerance, uint32_t yy_groups_size, uint32_t samples_size,

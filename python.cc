@@ -70,6 +70,7 @@ using pyarray = _pyobj<PyArrayObject>;
 static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"kmeans++", kmcudaInitMethodPlusPlus},
     {"k-means++", kmcudaInitMethodPlusPlus},
+    {"afkmc2", kmcudaInitMethodAFKMC2},
     {"random", kmcudaInitMethodRandom}
 };
 
@@ -168,6 +169,7 @@ static bool get_samples(
 
 static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs) {
   uint32_t clusters_size = 0,
+           afkmc2_m = 0,
            seed = static_cast<uint32_t>(time(NULL)),
            device = 0;
   int32_t verbosity = 0;
@@ -188,19 +190,39 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   }
 
   KMCUDAInitMethod init;
-  if (init_obj == Py_None) {
-    init = kmcudaInitMethodPlusPlus;
-  } else if (PyUnicode_Check(init_obj)) {
-    pyobj bytes(PyUnicode_AsASCIIString(init_obj));
+  auto set_init = [&init](PyObject *obj) {
+    pyobj bytes(PyUnicode_AsASCIIString(obj));
     auto iminit = init_methods.find(PyBytes_AsString(bytes.get()));
     if (iminit == init_methods.end()) {
       PyErr_SetString(
           PyExc_ValueError,
           "Unknown centroids initialization method. Supported values are "
               "\"kmeans++\", \"random\" and <numpy array>.");
-      return NULL;
+      return false;
     }
     init = iminit->second;
+    return true;
+  };
+
+  if (init_obj == Py_None) {
+    init = kmcudaInitMethodPlusPlus;
+  } else if (PyUnicode_Check(init_obj)) {
+    if (!set_init(init_obj)) {
+      return NULL;
+    }
+  } else if PyTuple_Check(init_obj) {
+    auto e1 = PyTuple_GetItem(init_obj, 0);
+    if (e1 == nullptr || e1 == Py_None) {
+      PyErr_SetString(
+          PyExc_ValueError, "centroid initialization method may not be null.");
+      return NULL;
+    }
+    if (!set_init(e1)) {
+      return NULL;
+    }
+    if (PyTuple_Size(init_obj) > 1 && init == kmcudaInitMethodAFKMC2) {
+      afkmc2_m = PyLong_AsUnsignedLong(PyTuple_GetItem(init_obj, 1));
+    }
   } else {
     init = kmcudaInitMethodImport;
   }
@@ -345,7 +367,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   int result;
   Py_BEGIN_ALLOW_THREADS
   result = kmeans_cuda(
-      init, tolerance, yinyang_t, metric, samples_size,
+      init, &afkmc2_m, tolerance, yinyang_t, metric, samples_size,
       static_cast<uint16_t>(features_size), clusters_size, seed, device,
       device_ptrs, fp16x2, verbosity, samples, centroids, assignments,
       adflag? &average_distance : nullptr);

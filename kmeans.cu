@@ -5,16 +5,24 @@
 #include <algorithm>
 #include <memory>
 
+#include <curand_kernel.h>
+
 #include "private.h"
 #include "metric_abstraction.h"
+#include "tricks.cuh"
 
-#define BS_KMPP 512
+#define BS_KMPP 1024
+#define BS_AFKMC2_Q 512
+#define BS_AFKMC2_R 512
+#define BS_AFKMC2_MDT 512
 #define BS_LL_ASS 256
 #define BS_LL_CNT 256
 #define BS_YY_INI 256
 #define BS_YY_GFL 512
 #define BS_YY_LFL 512
 #define BLOCK_SIZE 1024  // for all the rest of the kernels
+#define SHMEM_AFKMC2_RC 8191  // in float-s, the actual value is +1
+#define SHMEM_AFKMC2_MT 8192
 
 #define YINYANG_GROUP_TOLERANCE 0.02
 #define YINYANG_DRAFT_REASSIGNMENTS 0.11
@@ -31,60 +39,175 @@ __constant__ int d_shmem_size;
 // Device functions //----------------------------------------------------------
 //////////////////////----------------------------------------------------------
 
-// https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
-__device__ __forceinline__ uint32_t atomicAggInc(uint32_t *ctr) {
-  int mask = __ballot(1);
-  int leader = __ffs(mask) - 1;
-  uint32_t res;
-  if ((threadIdx.x % 32) == leader) {
-    res = atomicAdd(ctr, __popc(mask));
-  }
-  res = __shfl(res, leader);
-  return res + __popc(mask & ((1 << (threadIdx.x % 32)) - 1));
-}
-
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_plus_plus(
     const uint32_t length, const uint32_t cc, const F *__restrict__ samples,
     const F *__restrict__ centroids, float *__restrict__ dists,
-    float *__restrict__ dist_sums) {
+    float *dists_sum) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  float dist = 0;
+  if (sample < length) {
+    samples += static_cast<uint64_t>(sample) * d_features_size;
+    centroids += (cc - 1) * d_features_size;
+    if (_eq(samples[0], samples[0])) {
+      dist = METRIC<M, F>::distance(samples, centroids);
+    }
+    float prev_dist;
+    if (cc == 1 || dist < (prev_dist = dists[sample])) {
+      dists[sample] = dist;
+    } else {
+      dist = prev_dist;
+    }
+  }
+  dist = warpReduceSum(dist);
+  if (threadIdx.x % 32 == 0) {
+    atomicAdd(dists_sum, dist);
+  }
+}
+
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_afkmc2_calc_q_dists(
+    const uint32_t offset, const uint32_t length, uint32_t c1_index,
+    const F *__restrict__ samples, float *__restrict__ dists,
+    float *dsum) {
+  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  float dist = 0;
+  if (sample < length) {
+    sample += offset;
+    extern __shared__ float shmem_afkmc2[];
+    auto c1 = reinterpret_cast<F*>(shmem_afkmc2);
+    uint16_t size_each = dupper(d_features_size, static_cast<uint16_t>(blockDim.x));
+    for (uint16_t i = size_each * threadIdx.x;
+         i < min(size_each * (threadIdx.x + 1), d_features_size); i++) {
+      c1[i] = samples[static_cast<uint64_t>(c1_index) * d_features_size + i];
+    }
+    __syncthreads();
+    dist = METRIC<M, F>::distance(c1, samples + sample * d_features_size);
+    dist *= dist;
+    dists[sample] = dist;
+  }
+  float sum = warpReduceSum(dist);
+  if (threadIdx.x % 32 == 0) {
+    atomicAdd(dsum, sum);
+  }
+}
+
+__global__ void kmeans_afkmc2_calc_q(
+    const uint32_t offset, const uint32_t length,
+    float dsum, float *__restrict__ q) {
+  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   if (sample >= length) {
     return;
   }
-  samples += static_cast<uint64_t>(sample) * d_features_size;
-  centroids += (cc - 1) * d_features_size;
-  extern __shared__ float local_dists[];
-  float dist = 0;
-  if (_eq(samples[0], samples[0])) {
-    dist = METRIC<M, F>::distance(samples, centroids);
+  sample += offset;
+  q[sample] = 1 / (2.f * d_samples_size) + q[sample] / (2 * dsum);
+}
+
+__global__ void kmeans_afkmc2_random_step(
+    const uint32_t m, const uint64_t seed, const uint64_t seq,
+    const float *__restrict__ q, uint32_t *__restrict__ choices,
+    float *__restrict__ samples) {
+  volatile uint32_t ti = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t state;
+  curand_init(seed, ti, seq, &state);
+  float part = curand_uniform(&state);
+  if (ti < m) {
+    samples[ti] = curand_uniform(&state);
   }
-  float prev_dist;
-  if (cc == 1 || dist < (prev_dist = dists[sample])) {
-    dists[sample] = dist;
-  } else {
-    dist = prev_dist;
+  float accum = 0, corr = 0;
+  bool found = false;
+  __shared__ float shared_q[SHMEM_AFKMC2_RC + 1];
+  int32_t *all_found = reinterpret_cast<int32_t*>(shared_q + SHMEM_AFKMC2_RC);
+  *all_found = blockDim.x;
+  const uint32_t size_each = dupper(
+      static_cast<unsigned>(SHMEM_AFKMC2_RC), blockDim.x);
+  for (uint32_t sample = 0; sample < d_samples_size; sample += SHMEM_AFKMC2_RC) {
+    __syncthreads();
+    if (*all_found == 0) {
+      return;
+    }
+    for (uint32_t i = 0, si = threadIdx.x * size_each;
+         i < size_each && (si = threadIdx.x * size_each + i) < SHMEM_AFKMC2_RC;
+         i++) {
+      shared_q[si] = q[sample + si];
+    }
+    __syncthreads();
+    if (!found) {
+      int i = 0;
+      #pragma unroll 4
+      for (; i < SHMEM_AFKMC2_RC && accum < part && sample + i < d_samples_size;
+           i++) {
+        // Kahan summation with inverted c
+        float y = _add(corr, shared_q[i]);
+        float t = accum + y;
+        corr = y - (t - accum);
+        accum = t;
+      }
+      if (accum >= part) {
+        if (ti < m) {
+          choices[ti] = sample + i - 1;
+        }
+        found = true;
+        atomicSub(all_found, 1);
+      }
+    }
   }
-  local_dists[threadIdx.x] = dist;
-  uint32_t end = blockDim.x;
-  if ((blockIdx.x + 1) * blockDim.x > length) {
-    end = length - blockIdx.x * blockDim.x;
+}
+
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_afkmc2_min_dist(
+    const uint32_t m, const uint32_t k, const F *__restrict__ samples,
+    const uint32_t *__restrict__ choices, const F *__restrict__ centroids,
+    float *__restrict__ min_dists) {
+  uint32_t chi = blockIdx.x * blockDim.x + threadIdx.x;
+  if (chi >= m) {
+    return;
+  }
+  float min_dist = FLT_MAX;
+  for (uint32_t c = 0; c < k; c++) {
+    float dist = METRIC<M, F>::distance(
+        samples + static_cast<uint64_t>(choices[chi]) * d_features_size,
+        centroids + c * d_features_size);
+    if (dist < min_dist) {
+      min_dist = dist;
+    }
+  }
+  min_dists[chi] = min_dist * min_dist;
+}
+
+// min_dists must be set to FLT_MAX or +inf or NAN!
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_afkmc2_min_dist_transposed(
+    const uint32_t m, const uint32_t k, const F *__restrict__ samples,
+    const uint32_t *__restrict__ choices, const F *__restrict__ centroids,
+    float *__restrict__ min_dists) {
+  uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  extern __shared__ float shared_min_dists[];
+  uint32_t size_each = dupper(m, blockDim.x);
+  for (uint32_t i = size_each * threadIdx.x;
+       i < min(size_each * (threadIdx.x + 1), m);
+       i++) {
+    shared_min_dists[i] = FLT_MAX;
   }
   __syncthreads();
-  if (threadIdx.x % 16 == 0) {
-    float psum = 0;
-    for (uint32_t i = threadIdx.x; i < end && i < threadIdx.x + 16; i++) {
-      psum += local_dists[i];
+  for (uint32_t chi = 0; chi < m; chi++) {
+    float dist = FLT_MAX;
+    if (c < k) {
+      dist = METRIC<M, F>::distance(
+          samples + static_cast<uint64_t>(choices[chi]) * d_features_size,
+          centroids + c * d_features_size);
     }
-    local_dists[threadIdx.x] = psum;
+    float warp_min = warpReduceMin(dist);
+    warp_min *= warp_min;
+    if (threadIdx.x % 32 == 0 && c < k) {
+      atomicMin(shared_min_dists + chi, warp_min);
+    }
   }
   __syncthreads();
   if (threadIdx.x == 0) {
-    float block_sum = 0;
-    for (uint32_t i = 0; i < end; i += 16) {
-      block_sum += local_dists[i];
+    for (uint32_t chi = 0; chi < m; chi++) {
+      atomicMin(min_dists + chi, shared_min_dists[chi]);
     }
-    dist_sums[blockIdx.x] = block_sum;
   }
 }
 
@@ -554,7 +677,7 @@ __global__ void kmeans_calc_average_distance(
     uint32_t offset, uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, const uint32_t *__restrict__ assignments,
     float *distance) {
-  uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
+  volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
     sample += offset;
@@ -562,13 +685,8 @@ __global__ void kmeans_calc_average_distance(
          samples + sample * d_features_size,
          centroids + assignments[sample] * d_features_size);
   }
-  __shared__ float dists[BLOCK_SIZE];
-  dists[threadIdx.x] = dist;
-  if (threadIdx.x == 0) {
-    float sum = 0;
-    for (int i = 0; i < BLOCK_SIZE; i++) {
-       sum += dists[i];
-    }
+  float sum = warpReduceSum(dist);
+  if (threadIdx.x % 32 == 0) {
     atomicAdd(distance, sum);
   }
 }
@@ -658,8 +776,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t h_samples_size, uint32_t h_features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, udevptrs<float> *dev_sums, float *host_dists,
-    float *dist_sum) {
+    udevptrs<float> *dists, float *host_dists, float *dist_sum) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   uint32_t max_len = 0;
   for (auto &p : plan) {
@@ -668,11 +785,9 @@ KMCUDAResult kmeans_cuda_plus_plus(
       max_len = len;
     }
   }
-  CUMEMSET(*dev_sums, 0, upper(max_len, static_cast<uint32_t>(BS_KMPP)));
-  size_t dist_sums_size = h_samples_size / BS_KMPP + devs.size();
-  std::unique_ptr<float[]> dist_sums(new float[dist_sums_size]);
-  memset(dist_sums.get(), 0, dist_sums_size * sizeof(float));
-
+  udevptrs<float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
@@ -681,11 +796,11 @@ KMCUDAResult kmeans_cuda_plus_plus(
     }
     dim3 block(BS_KMPP, 1, 1);
     dim3 grid(upper(length, block.x), 1, 1);
-    KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block, block.x * sizeof(float)>>>(
+    KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block>>>(
         length, cc,
         reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
         reinterpret_cast<const F*>((*centroids)[devi].get()),
-        (*dists)[devi].get(), (*dev_sums)[devi].get()));
+        (*dists)[devi].get(), dev_dists[devi].get()));
   );
   uint32_t dist_offset = 0;
   FOR_EACH_DEVI(
@@ -696,18 +811,124 @@ KMCUDAResult kmeans_cuda_plus_plus(
     CUCH(cudaMemcpyAsync(
         host_dists + offset, (*dists)[devi].get(),
         length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
-    CUCH(cudaMemcpyAsync(
-        dist_sums.get() + dist_offset, (*dev_sums)[devi].get(),
-        grid.x * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
     dist_offset += grid.x;
   );
+  float sum = 0;
+  FOR_EACH_DEVI(
+    if (std::get<1>(plan[devi]) == 0) {
+      continue;
+    }
+    float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+                    cudaMemcpyDeviceToHost),
+         kmcudaMemoryCopyError);
+    sum += hdist;
+  );
+  *dist_sum = sum;
+  return kmcudaSuccess;
+}
+
+KMCUDAResult kmeans_cuda_afkmc2_calc_q(
+    uint32_t h_samples_size, uint32_t h_features_size, uint32_t firstc,
+    KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
+    int verbosity, const udevptrs<float> &samples, udevptrs<float> *d_q,
+    float *h_q) {
+  auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
+  udevptrs<float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
+  FOR_EACH_DEVI(
+    uint32_t offset, length;
+    std::tie(offset, length) = plan[devi];
+    if (length == 0) {
+      continue;
+    }
+    dim3 block(BS_AFKMC2_Q, 1, 1);
+    dim3 grid(upper(length, block.x), 1, 1);
+    int shmem = std::max(
+        BS_AFKMC2_Q, static_cast<int>(h_features_size)) * sizeof(float);
+    KERNEL_SWITCH(kmeans_afkmc2_calc_q_dists,
+                  <<<grid, block, shmem>>>(
+        offset, length, firstc,
+        reinterpret_cast<const F*>(samples[devi].get()),
+        (*d_q)[devi].get(), dev_dists[devi].get()));
+
+  );
+  float dists_sum = 0;
+  FOR_EACH_DEVI(
+    if (std::get<1>(plan[devi]) == 0) {
+      continue;
+    }
+    float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+                    cudaMemcpyDeviceToHost),
+         kmcudaMemoryCopyError);
+    dists_sum += hdist;
+  );
+  FOR_EACH_DEVI(
+    uint32_t offset, length;
+    std::tie(offset, length) = plan[devi];
+    if (length == 0) {
+      continue;
+    }
+    dim3 block(BLOCK_SIZE, 1, 1);
+    dim3 grid(upper(length, block.x), 1, 1);
+    kmeans_afkmc2_calc_q<<<grid, block>>>(
+        offset, length, dists_sum, (*d_q)[devi].get());
+  );
+  FOR_EACH_DEVI(
+    uint32_t offset, length;
+    std::tie(offset, length) = plan[devi];
+    CUCH(cudaMemcpyAsync(h_q + offset, (*d_q)[devi].get() + offset,
+                         length * sizeof(float), cudaMemcpyDeviceToHost),
+         kmcudaMemoryCopyError);
+    FOR_OTHER_DEVS(
+      CUP2P(d_q, offset, length);
+    );
+  );
   SYNC_ALL_DEVS;
-  double ds = 0;
-  #pragma omp simd reduction(+:ds)
-  for (uint32_t i = 0; i < dist_offset; i++) {
-    ds += dist_sums[i];
+  return kmcudaSuccess;
+}
+
+KMCUDAResult kmeans_cuda_afkmc2_random_step(
+    uint32_t k, uint32_t m, uint64_t seed, int verbosity, const float *q,
+    uint32_t *d_choices, uint32_t *h_choices, float *d_samples, float *h_samples) {
+  dim3 block(BS_AFKMC2_R, 1, 1);
+  dim3 grid(upper(m, block.x), 1, 1);
+  kmeans_afkmc2_random_step<<<grid, block>>>(
+      m, seed, k, q, d_choices, d_samples);
+  CUCH(cudaMemcpy(h_choices, d_choices, m * sizeof(uint32_t),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
+  CUCH(cudaMemcpy(h_samples, d_samples, m * sizeof(float),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
+  return kmcudaSuccess;
+}
+
+KMCUDAResult kmeans_cuda_afkmc2_min_dist(
+    uint32_t k, uint32_t m, KMCUDADistanceMetric metric, int fp16x2,
+    int32_t verbosity, const float *samples, const uint32_t *choices,
+    const float *centroids, float *d_min_dists, float *h_min_dists) {
+  if (m > k || m > SHMEM_AFKMC2_MT) {
+    dim3 block(BLOCK_SIZE, 1, 1);
+    dim3 grid(upper(m, block.x), 1, 1);
+    KERNEL_SWITCH(kmeans_afkmc2_min_dist, <<<grid, block>>>(
+        m, k, reinterpret_cast<const F*>(samples), choices,
+        reinterpret_cast<const F*>(centroids), d_min_dists));
+  } else {
+    dim3 block(BS_AFKMC2_MDT, 1, 1);
+    dim3 grid(upper(k, block.x), 1, 1);
+    CUCH(cudaMemsetAsync(d_min_dists, 0xff, m * sizeof(float)),
+         kmcudaRuntimeError);
+    KERNEL_SWITCH(kmeans_afkmc2_min_dist_transposed,
+        <<<grid, block, m * sizeof(float)>>>(
+        m, k, reinterpret_cast<const F*>(samples), choices,
+        reinterpret_cast<const F*>(centroids), d_min_dists));
   }
-  *dist_sum = ds;
+  CUCH(cudaMemcpy(h_min_dists, d_min_dists, m * sizeof(float),
+                  cudaMemcpyDeviceToHost),
+       kmcudaMemoryCopyError);
   return kmcudaSuccess;
 }
 
@@ -857,9 +1078,9 @@ KMCUDAResult kmeans_cuda_yy(
       tmpbufs2.emplace_back(tmpbufs.back().get() + h_clusters_size, true);
     }
     RETERR(kmeans_init_centroids(
-        kmcudaInitMethodPlusPlus, h_clusters_size, h_features_size, h_yy_groups_size,
-        metric, 0, devs, -1, fp16x2, verbosity, nullptr, *centroids, &tmpbufs, drifts_yy,
-        centroids_yy),
+        kmcudaInitMethodPlusPlus, nullptr, h_clusters_size, h_features_size,
+        h_yy_groups_size, metric, 0, devs, -1, fp16x2, verbosity, nullptr,
+        *centroids, &tmpbufs, nullptr, centroids_yy),
            INFO("kmeans_init_centroids() failed for yinyang groups: %s\n",
                 cudaGetErrorString(cudaGetLastError())));
     RETERR(kmeans_cuda_lloyd(
@@ -1046,25 +1267,28 @@ KMCUDAResult kmeans_cuda_calc_average_distance(
     float *average_distance) {
   INFO("calculating the average distance...\n");
   auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
-  float *dev_dists[devs.size()];
+  udevptrs<float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plans[devi];
-    CUCH(cudaMalloc(&dev_dists[devi], sizeof(float)),
-         kmcudaMemoryAllocationFailure);
-    CUCH(cudaMemsetAsync(dev_dists[devi], 0, sizeof(float)),
-         kmcudaRuntimeError);
+    if (length == 0) {
+      continue;
+    }
     dim3 block(BLOCK_SIZE, 1, 1);
     dim3 grid(upper(length, block.x), 1, 1);
-    KERNEL_SWITCH(kmeans_calc_average_distance, <<<grid, block>>>(
+    KERNEL_SWITCH(kmeans_calc_average_distance,
+                  <<<grid, block, block.x * sizeof(float)>>>(
         offset, length, reinterpret_cast<const F*>(samples[devi].get()),
         reinterpret_cast<const F*>(centroids[devi].get()),
-        assignments[devi].get(), dev_dists[devi]));
+        assignments[devi].get(), dev_dists[devi].get()));
   );
   float sum = 0;
   FOR_EACH_DEVI(
     float hdist;
-    CUCH(cudaMemcpy(&hdist, dev_dists[devi], sizeof(float), cudaMemcpyDeviceToHost),
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+                    cudaMemcpyDeviceToHost),
          kmcudaMemoryCopyError);
     sum += hdist;
   );
