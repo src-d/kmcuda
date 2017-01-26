@@ -328,23 +328,40 @@ KMCUDAResult kmeans_init_centroids(
       INFO("afkmc2: calculating q (c0 = %" PRIu32 ")... ",
            first_offset / features_size);
       CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
-      auto q = dists;
+      auto q = std::unique_ptr<float[]>(new float[samples_size]);
       kmeans_cuda_afkmc2_calc_q(
           samples_size, features_size, first_offset / features_size, metric,
-          devs, fp16x2, verbosity, samples, q);
+          devs, fp16x2, verbosity, samples, dists, q.get());
       INFO("done\n");
-      auto choices = std::unique_ptr<uint32_t[]>(new uint32_t[m]);
-      auto random_samples = std::unique_ptr<float[]>(new float[m]);
-      auto min_dists = std::unique_ptr<float[]>(new float[m]);
+      auto cand_ind = std::unique_ptr<uint32_t[]>(new uint32_t[m]);
+      auto rand_a = std::unique_ptr<float[]>(new float[m]);
+      auto p_cand = std::unique_ptr<float[]>(new float[m]);
       for (uint32_t k = 1; k < clusters_size; k++) {
+        if (verbosity > 1 || (verbosity > 0 && (
+              clusters_size < 100 || k % (clusters_size / 100) == 0))) {
+          printf("\rstep %d", k);
+          fflush(stdout);
+        }
         RETERR(kmeans_cuda_afkmc2_random_step(
-            k, m, seed, verbosity, q->back().get(),
+            k, m, seed, verbosity, dists->back().get(),
             reinterpret_cast<uint32_t*>(aux->back().get()),
-            choices.get(), aux->back().get() + m, random_samples.get()));
+            cand_ind.get(), aux->back().get() + m, rand_a.get()));
         RETERR(kmeans_cuda_afkmc2_min_dist(
-            m, k, metric, fp16x2, verbosity, samples.back().get(),
+            k, m, metric, fp16x2, verbosity, samples.back().get(),
             reinterpret_cast<uint32_t*>(aux->back().get()),
-            centroids->back().get(), aux->back().get() + m, min_dists.get()));
+            centroids->back().get(), aux->back().get() + m, p_cand.get()));
+        float curr_prob = 0;
+        uint32_t curr_ind = 0;
+        for (uint32_t j = 0; j < m; j++) {
+          auto cand_prob = p_cand[j] / q[cand_ind[j]];
+          if (curr_prob == 0 || cand_prob / curr_prob > rand_a[j]) {
+            curr_ind = j;
+            curr_prob = cand_prob;
+          }
+        }
+        CUMEMCPY_D2D_ASYNC(*centroids, k * features_size,
+                           samples, cand_ind[curr_ind] * features_size,
+                           features_size);
       }
       break;
     }

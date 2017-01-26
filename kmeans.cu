@@ -116,6 +116,7 @@ __global__ void kmeans_afkmc2_random_step(
   bool found = false;
   __shared__ float shared_q[SHMEM_AFKMC2_RC + 1];
   int32_t *all_found = reinterpret_cast<int32_t*>(shared_q + SHMEM_AFKMC2_RC);
+  *all_found = blockDim.x;
   const uint32_t size_each = dupper(
       static_cast<unsigned>(SHMEM_AFKMC2_RC), blockDim.x);
   for (uint32_t sample = 0; sample < d_samples_size; sample += SHMEM_AFKMC2_RC) {
@@ -123,26 +124,26 @@ __global__ void kmeans_afkmc2_random_step(
     if (*all_found == 0) {
       return;
     }
-    for (uint32_t i = 0;
-         i < size_each && threadIdx.x * size_each + i < SHMEM_AFKMC2_RC;
+    for (uint32_t i = 0, si = threadIdx.x * size_each;
+         i < size_each && (si = threadIdx.x * size_each + i) < SHMEM_AFKMC2_RC;
          i++) {
-      shared_q[threadIdx.x * size_each + i] = q[sample + threadIdx.x * size_each + i];
+      shared_q[si] = q[sample + si];
     }
     __syncthreads();
     if (!found) {
       int i = 0;
       #pragma unroll 4
-      for (; i < SHMEM_AFKMC2_RC && accum < part; i++) {
+      for (; i < SHMEM_AFKMC2_RC && accum < part && sample + i < d_samples_size;
+           i++) {
         // Kahan summation with inverted c
-        float v = shared_q[i++];
-        float y = _add(corr, v);
+        float y = _add(corr, shared_q[i]);
         float t = accum + y;
         corr = y - (t - accum);
         accum = t;
       }
       if (accum >= part) {
         if (ti < m) {
-          choices[ti] = sample + i;
+          choices[ti] = sample + i - 1;
         }
         found = true;
         atomicSub(all_found, 1);
@@ -792,7 +793,8 @@ KMCUDAResult kmeans_cuda_plus_plus(
 KMCUDAResult kmeans_cuda_afkmc2_calc_q(
     uint32_t h_samples_size, uint32_t h_features_size, uint32_t firstc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
-    int verbosity, const udevptrs<float> &samples, udevptrs<float> *q) {
+    int verbosity, const udevptrs<float> &samples, udevptrs<float> *d_q,
+    float *h_q) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   udevptrs<float> dev_dists;
   CUMALLOC(dev_dists, sizeof(float));
@@ -811,7 +813,7 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
                   <<<grid, block, shmem>>>(
         offset, length, firstc,
         reinterpret_cast<const F*>(samples[devi].get()),
-        (*q)[devi].get(), dev_dists[devi].get()));
+        (*d_q)[devi].get(), dev_dists[devi].get()));
 
   );
   float dists_sum = 0;
@@ -834,15 +836,19 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
     dim3 block(BLOCK_SIZE, 1, 1);
     dim3 grid(upper(length, block.x), 1, 1);
     kmeans_afkmc2_calc_q<<<grid, block>>>(
-        offset, length, dists_sum, (*q)[devi].get());
+        offset, length, dists_sum, (*d_q)[devi].get());
   );
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
+    CUCH(cudaMemcpyAsync(h_q + offset, (*d_q)[devi].get() + offset,
+                         length * sizeof(float), cudaMemcpyDeviceToHost),
+         kmcudaMemoryCopyError);
     FOR_OTHER_DEVS(
-      CUP2P(q, offset, length);
+      CUP2P(d_q, offset, length);
     );
   );
+  SYNC_ALL_DEVS;
   return kmcudaSuccess;
 }
 
@@ -851,8 +857,7 @@ KMCUDAResult kmeans_cuda_afkmc2_random_step(
     uint32_t *d_choices, uint32_t *h_choices, float *d_samples, float *h_samples) {
   dim3 block(BS_AFKMC2_R, 1, 1);
   dim3 grid(upper(m, block.x), 1, 1);
-  int shmem = (SHMEM_AFKMC2_RC + 1) * sizeof(float);
-  kmeans_afkmc2_random_step<<<grid, block, shmem>>>(
+  kmeans_afkmc2_random_step<<<grid, block>>>(
       m, seed, k, q, d_choices, d_samples);
   CUCH(cudaMemcpy(h_choices, d_choices, m * sizeof(uint32_t),
                   cudaMemcpyDeviceToHost),
@@ -864,8 +869,8 @@ KMCUDAResult kmeans_cuda_afkmc2_random_step(
 }
 
 KMCUDAResult kmeans_cuda_afkmc2_min_dist(
-    const uint32_t m, const uint32_t k, KMCUDADistanceMetric metric,
-    int fp16x2, int32_t verbosity, const float *samples, const uint32_t *choices,
+    uint32_t k, uint32_t m, KMCUDADistanceMetric metric, int fp16x2,
+    int32_t verbosity, const float *samples, const uint32_t *choices,
     const float *centroids, float *d_min_dists, float *h_min_dists) {
   dim3 block(BLOCK_SIZE, 1, 1);
   dim3 grid(upper(m, block.x), 1, 1);
