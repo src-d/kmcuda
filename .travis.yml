@@ -12,3 +12,6 @@ before_script:
 
 script:
   - make -j2 VERBOSE=1
+
+notifications:
+  email: false
