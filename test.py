@@ -239,7 +239,7 @@ class KmeansTests(unittest.TestCase):
     def test_afkmc2_lloyd(self):
         with self.stdout:
             centroids, assignments = kmeans_cuda(
-                self.samples, 50, init=("afkmc2", 200), device=0,
+                self.samples, 50, init=("afkmc2", 200), device=1,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
         self.assertEqual(self._get_iters_number(self.stdout), 4)
         self._validate(centroids, assignments, 0.05)
@@ -263,6 +263,21 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(centroids.shape, (50, 2))
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
+
+    def test_afkmc2_lloyd_2gpus(self):
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                self.samples, 50, init="afkmc2", device=0,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(self._get_iters_number(self.stdout), 4)
+        self._validate(centroids, assignments, 0.05)
+
+    def test_afkmc2_big_k_lloyd(self):
+        with self.stdout:
+            kmeans_cuda(
+                self.samples, 200, init=("afkmc2", 100), device=0,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(self._get_iters_number(self.stdout), 4)
 
     def test_random_lloyd_all_explicit_gpus(self):
         with self.assertRaises(ValueError):
@@ -432,6 +447,18 @@ class KmeansTests(unittest.TestCase):
                 samples, 50, init="kmeans++", device=1,
                 verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
         self.assertEqual(self._get_iters_number(self.stdout), 5)
+        centroids = centroids.astype(numpy.float32)
+        self._validate(centroids, assignments, 0.05)
+
+    @unittest.skipUnless(supports_fp16,
+                         "16-bit floats are not supported by this CUDA arch")
+    def test_fp16_afkmc2_lloyd(self):
+        samples = self.samples.astype(numpy.float16)
+        with self.stdout:
+            centroids, assignments = kmeans_cuda(
+                samples, 50, init="afkmc2", device=1,
+                verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
+        self.assertEqual(self._get_iters_number(self.stdout), 4)
         centroids = centroids.astype(numpy.float32)
         self._validate(centroids, assignments, 0.05)
 

@@ -14,6 +14,7 @@
 #define BS_KMPP 1024
 #define BS_AFKMC2_Q 512
 #define BS_AFKMC2_R 512
+#define BS_AFKMC2_MDT 512
 #define BS_LL_ASS 256
 #define BS_LL_CNT 256
 #define BS_YY_INI 256
@@ -21,6 +22,7 @@
 #define BS_YY_LFL 512
 #define BLOCK_SIZE 1024  // for all the rest of the kernels
 #define SHMEM_AFKMC2_RC 8191  // in float-s, the actual value is +1
+#define SHMEM_AFKMC2_MT 8192
 
 #define YINYANG_GROUP_TOLERANCE 0.02
 #define YINYANG_DRAFT_REASSIGNMENTS 0.11
@@ -171,6 +173,42 @@ __global__ void kmeans_afkmc2_min_dist(
     }
   }
   min_dists[chi] = min_dist * min_dist;
+}
+
+// min_dists must be set to FLT_MAX or +inf or NAN!
+template <KMCUDADistanceMetric M, typename F>
+__global__ void kmeans_afkmc2_min_dist_transposed(
+    const uint32_t m, const uint32_t k, const F *__restrict__ samples,
+    const uint32_t *__restrict__ choices, const F *__restrict__ centroids,
+    float *__restrict__ min_dists) {
+  uint32_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  extern __shared__ float shared_min_dists[];
+  uint32_t size_each = dupper(m, blockDim.x);
+  for (uint32_t i = size_each * threadIdx.x;
+       i < min(size_each * (threadIdx.x + 1), m);
+       i++) {
+    shared_min_dists[i] = FLT_MAX;
+  }
+  __syncthreads();
+  for (uint32_t chi = 0; chi < m; chi++) {
+    float dist = FLT_MAX;
+    if (c < k) {
+      dist = METRIC<M, F>::distance(
+          samples + static_cast<uint64_t>(choices[chi]) * d_features_size,
+          centroids + c * d_features_size);
+    }
+    float warp_min = warpReduceMin(dist);
+    warp_min *= warp_min;
+    if (threadIdx.x % 32 == 0 && c < k) {
+      atomicMin(shared_min_dists + chi, warp_min);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    for (uint32_t chi = 0; chi < m; chi++) {
+      atomicMin(min_dists + chi, shared_min_dists[chi]);
+    }
+  }
 }
 
 template <KMCUDADistanceMetric M, typename F>
@@ -872,11 +910,22 @@ KMCUDAResult kmeans_cuda_afkmc2_min_dist(
     uint32_t k, uint32_t m, KMCUDADistanceMetric metric, int fp16x2,
     int32_t verbosity, const float *samples, const uint32_t *choices,
     const float *centroids, float *d_min_dists, float *h_min_dists) {
-  dim3 block(BLOCK_SIZE, 1, 1);
-  dim3 grid(upper(m, block.x), 1, 1);
-  KERNEL_SWITCH(kmeans_afkmc2_min_dist, <<<grid, block>>>(
-      m, k, reinterpret_cast<const F*>(samples), choices,
-      reinterpret_cast<const F*>(centroids), d_min_dists));
+  if (m > k || m > SHMEM_AFKMC2_MT) {
+    dim3 block(BLOCK_SIZE, 1, 1);
+    dim3 grid(upper(m, block.x), 1, 1);
+    KERNEL_SWITCH(kmeans_afkmc2_min_dist, <<<grid, block>>>(
+        m, k, reinterpret_cast<const F*>(samples), choices,
+        reinterpret_cast<const F*>(centroids), d_min_dists));
+  } else {
+    dim3 block(BS_AFKMC2_MDT, 1, 1);
+    dim3 grid(upper(k, block.x), 1, 1);
+    CUCH(cudaMemsetAsync(d_min_dists, 0xff, m * sizeof(float)),
+         kmcudaRuntimeError);
+    KERNEL_SWITCH(kmeans_afkmc2_min_dist_transposed,
+        <<<grid, block, m * sizeof(float)>>>(
+        m, k, reinterpret_cast<const F*>(samples), choices,
+        reinterpret_cast<const F*>(centroids), d_min_dists));
+  }
   CUCH(cudaMemcpy(h_min_dists, d_min_dists, m * sizeof(float),
                   cudaMemcpyDeviceToHost),
        kmcudaMemoryCopyError);

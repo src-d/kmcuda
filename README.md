@@ -25,14 +25,17 @@ have several days and 12 GB of GPU memory); 300K samples are grouped
 into 5000 clusters in 4½ minutes on NVIDIA Titan X (15 iterations); 3M samples
 and 1000 clusters take 20 minutes (33 iterations). Yinyang can be
 turned off to save GPU memory but the slower Lloyd will be used then.
-Three centroid initialization schemes are supported: random, k-means++ and import.
-Two distance metrics are supported: L2 (the usual one) and angular (refined cosine).
+Four centroid initialization schemes are supported: random, k-means++,
+[AFKMC2](http://olivierbachem.ch/files/afkmcmc-oral-pdf.pdf) and import.
+Two distance metrics are supported: L2 (the usual one) and angular
+(arccos of the scalar product). L1 is in development.
 16-bit float support delivers 2x memory compression. If you've got several GPUs,
 they can be utilized together and it gives the corresponding linear speedup
 either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
-results from Yinyang and Lloyd.
+results from Yinyang and Lloyd. AFKMC2 was converted from
+[the reference code](https://github.com/obachem/kmc2).
 
 Read the articles: [1](http://blog.sourced.tech/post/towards_kmeans_on_gpu/),
 [2](https://blog.sourced.tech/post/kmcuda4/).
