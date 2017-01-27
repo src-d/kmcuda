@@ -34,7 +34,7 @@ they can be utilized together and it gives the corresponding linear speedup
 either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
-results from Yinyang and Lloyd. AFKMC2 was converted from
+results from Yinyang and Lloyd. "Fast and Provably Good Seedings for k-Means" was adapted from
 [the reference code](https://github.com/obachem/kmc2).
 
 Read the articles: [1](http://blog.sourced.tech/post/towards_kmeans_on_gpu/),
