@@ -37,9 +37,6 @@ static KMCUDAResult check_kmeans_args(
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
   }
-  if (device < 0) {
-    return kmcudaNoSuchDevice;
-  }
   int devices = 0;
   cudaGetDeviceCount(&devices);
   if (device > (1u << devices)) {
@@ -68,7 +65,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
   if (device == 0) {
     cudaGetDeviceCount(reinterpret_cast<int *>(&device));
     if (device == 0) {
-      return std::move(devs);
+      return devs;
     }
     device = (1u << device) - 1;
   }
@@ -135,7 +132,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
     // remove device_ptrs - it is not in the devices list
     devs.pop_back();
   }
-  return std::move(devs);
+  return devs;
 }
 
 template <typename T>
@@ -515,9 +512,6 @@ static KMCUDAResult check_knn_args(
   }
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
-  }
-  if (device < 0) {
-    return kmcudaNoSuchDevice;
   }
   int devices = 0;
   cudaGetDeviceCount(&devices);

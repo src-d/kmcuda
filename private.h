@@ -218,7 +218,7 @@ inline plan_t distribute(
     offset += len;
   }
   res.emplace_back(offset, amount - offset);
-  return std::move(res);
+  return res;
 }
 
 inline uint32_t max_distribute_length(
