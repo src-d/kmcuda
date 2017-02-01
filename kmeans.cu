@@ -15,9 +15,9 @@
 #define BS_AFKMC2_Q 512
 #define BS_AFKMC2_R 512
 #define BS_AFKMC2_MDT 512
-#define BS_LL_ASS 256
+#define BS_LL_ASS 128
 #define BS_LL_CNT 256
-#define BS_YY_INI 256
+#define BS_YY_INI 128
 #define BS_YY_GFL 512
 #define BS_YY_LFL 512
 #define BLOCK_SIZE 1024  // for all the rest of the kernels
