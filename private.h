@@ -250,6 +250,15 @@ inline void print_plan(
 
 extern "C" {
 
+KMCUDAResult cuda_copy_sample_t(
+    uint32_t index, uint32_t offset, uint32_t samples_size, uint16_t features_size,
+    const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
+    udevptrs<float> *dest);
+
+KMCUDAResult cuda_inplace_transpose(
+    uint32_t samples_size, uint16_t features_size, const std::vector<int> &devs,
+    int verbosity, udevptrs<float> *samples);
+
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,

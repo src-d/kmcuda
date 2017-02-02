@@ -41,8 +41,8 @@ __global__ void knn_calc_cluster_radiuses(
     for (uint32_t ass = inv_asses_offsets[ci]; ass < inv_asses_offsets[ci + 1];
          ass++) {
        uint64_t sample = inv_asses[ass];  // uint64_t!
-       sample_dists[sample] += METRIC<M, F>::partial(
-           my_cent, samples + sample * d_features_size + cfi, fsize);
+       sample_dists[sample] += METRIC<M, F>::partial_t(
+           my_cent, samples, fsize, d_samples_size, cfi, sample);
     }
   }
   // stage 2 - find the maximum distance
@@ -188,8 +188,8 @@ __global__ void knn_assign_shmem(
   }
   sample += offset;
   volatile uint32_t mycls = assignments[sample];
-  volatile float mydist = METRIC<M, F>::distance(
-      samples + sample * d_features_size, centroids + mycls * d_features_size);
+  volatile float mydist = METRIC<M, F>::distance_t(
+      samples, centroids + mycls * d_features_size, d_samples_size, sample);
   extern __shared__ float buffer[];
   float *volatile mynearest = buffer + k * 2 * threadIdx.x;
   volatile float mndist = FLT_MAX;
@@ -204,9 +204,8 @@ __global__ void knn_assign_shmem(
     if (sample == other_sample) {
       continue;
     }
-    float dist = METRIC<M, F>::distance(
-        samples + sample * d_features_size,
-        samples + other_sample * d_features_size);
+    float dist = METRIC<M, F>::distance_tt(
+        samples, d_samples_size, sample, other_sample);
     if (dist <= mndist) {
       push_sample(k, dist, other_sample, mynearest);
       mndist = mynearest[0];
@@ -229,9 +228,8 @@ __global__ void knn_assign_shmem(
     atomicAdd(&d_dists_calced, pos_finish - pos_start);
     for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
       uint64_t other_sample = inv_asses[pos];
-      dist = METRIC<M, F>::distance(
-          samples + sample * d_features_size,
-          samples + other_sample * d_features_size);
+      dist = METRIC<M, F>::distance_tt(
+          samples, d_samples_size, sample, other_sample);
       if (dist <= mndist) {
         push_sample(k, dist, other_sample, mynearest);
         mndist = mynearest[0];
@@ -258,8 +256,8 @@ __global__ void knn_assign_gmem(
   }
   sample += offset;
   volatile uint32_t mycls = assignments[sample];
-  volatile float mydist = METRIC<M, F>::distance(
-      samples + sample * d_features_size, centroids + mycls * d_features_size);
+  volatile float mydist = METRIC<M, F>::distance_t(
+      samples, centroids + mycls * d_features_size, d_samples_size, sample);
   float *volatile mynearest =
       reinterpret_cast<float*>(neighbors) + (sample - offset) * k * 2;
   volatile float mndist = FLT_MAX;
@@ -274,9 +272,8 @@ __global__ void knn_assign_gmem(
     if (sample == other_sample) {
       continue;
     }
-    float dist = METRIC<M, F>::distance(
-        samples + sample * d_features_size,
-        samples + other_sample * d_features_size);
+    float dist = METRIC<M, F>::distance_tt(
+        samples, d_samples_size, sample, other_sample);
     if (dist <= mndist) {
       push_sample(k, dist, other_sample, mynearest);
       mndist = mynearest[0];
@@ -299,9 +296,8 @@ __global__ void knn_assign_gmem(
     atomicAdd(&d_dists_calced, pos_finish - pos_start);
     for (uint32_t pos = pos_start; pos < pos_finish; pos++) {
       uint64_t other_sample = inv_asses[pos];
-      dist = METRIC<M, F>::distance(
-          samples + sample * d_features_size,
-          samples + other_sample * d_features_size);
+      dist = METRIC<M, F>::distance_tt(
+          samples, d_samples_size, sample, other_sample);
       if (dist <= mndist) {
         push_sample(k, dist, other_sample, mynearest);
         mndist = mynearest[0];

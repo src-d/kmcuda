@@ -358,10 +358,13 @@ class KmeansTests(unittest.TestCase):
             assignments = cuda.api.copy_to_host(
                 adevptr, 13000, numpy.uint32)
             self._validate(centroids, assignments, 0.05)
+            new_samples = cuda.api.copy_to_host(
+                devptr, self.samples.size * 4, numpy.float32)
         finally:
             cuda.api.free(devptr)
             cuda.api.free(cdevptr)
             cuda.api.free(adevptr)
+        self.assertTrue((self.samples.ravel() == new_samples.ravel()).all())
 
     def test_random_lloyd_different_device_ptr(self):
         cuda = CUDA()
