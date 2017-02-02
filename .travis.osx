@@ -3,4 +3,5 @@
 brew install llvm --with-clang
 brew install python3
 pip3 install numpy
+brew cask update
 brew cask install --verbose cuda
