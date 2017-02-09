@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda) [![PyPI](https://img.shields.io/pypi/v/libKMCUDA.svg)](https://pypi.python.org/pypi/libKMCUDA)
+[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda) [![PyPI](https://img.shields.io/pypi/v/libKMCUDA.svg)](https://pypi.python.org/pypi/libKMCUDA) [![10.5281/zenodo.286944](https://zenodo.org/badge/DOI/10.5281/zenodo.286944.svg)](https://doi.org/10.5281/zenodo.286944)
 
 "Yinyang" K-means and K-nn using NVIDIA CUDA
 ============================================
