@@ -6,8 +6,6 @@
 #include <tuple>
 #include "wrappers.h"
 
-typedef unsigned long long cuint64_t;
-
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
 #define TRACE(...) do { if (verbosity > 2) { printf(__VA_ARGS__); } } while (false)
@@ -255,9 +253,9 @@ KMCUDAResult cuda_copy_sample_t(
     const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
     udevptrs<float> *dest);
 
-KMCUDAResult cuda_inplace_transpose(
-    uint32_t samples_size, uint16_t features_size, const std::vector<int> &devs,
-    int verbosity, udevptrs<float> *samples);
+KMCUDAResult cuda_transpose(
+    uint32_t samples_size, uint16_t features_size, bool forward,
+    const std::vector<int> &devs, int verbosity, udevptrs<float> *samples);
 
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,

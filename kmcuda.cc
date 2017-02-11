@@ -222,7 +222,7 @@ KMCUDAResult kmeans_init_centroids(
         chosen[s] = s;
       }
       std::random_shuffle(chosen.begin(), chosen.end());
-      DEBUG("shuffle complete, copying to device(s)\n");
+      DEBUG("shuffle complete, copying to device(s)...\n");
       for (uint32_t c = 0; c < clusters_size; c++) {
         RETERR(cuda_copy_sample_t(
             chosen[c], c * features_size, samples_size, features_size, devs,
@@ -450,8 +450,8 @@ KMCUDAResult kmeans_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStart());
   #endif
-  RETERR(cuda_inplace_transpose(
-      samples_size, features_size, devs, verbosity, &device_samples));
+  RETERR(cuda_transpose(
+      samples_size, features_size, true, devs, verbosity, &device_samples));
   RETERR(kmeans_init_centroids(
       init, init_params, samples_size, features_size, clusters_size, metric,
       seed, devs, device_ptrs, fp16x2, verbosity, centroids, device_samples,
@@ -483,8 +483,8 @@ KMCUDAResult kmeans_cuda(
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
-      RETERR(cuda_inplace_transpose(
-          features_size, samples_size, devs, verbosity, &device_samples));
+      RETERR(cuda_transpose(
+          samples_size, features_size, false, devs, verbosity, &device_samples));
       CUCH(cudaMemcpyPeerAsync(centroids, device_ptrs,
                                device_centroids[devs.size() - 1].get(),
                                devs.back(), centroids_size * sizeof(float)),
@@ -613,8 +613,8 @@ KMCUDAResult knn_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStart());
   #endif
-  RETERR(cuda_inplace_transpose(
-      samples_size, features_size, devs, verbosity, &device_samples));
+  RETERR(cuda_transpose(
+      samples_size, features_size, true, devs, verbosity, &device_samples));
   {
     INFO("initializing the inverse assignments...\n");
     auto asses_with_idxs = std::unique_ptr<std::tuple<uint32_t, uint32_t>[]>(
@@ -625,8 +625,6 @@ KMCUDAResult knn_cuda(
         asses_with_idxs[s] = std::make_tuple(assignments[s], s);
       }
     } else {
-      RETERR(cuda_inplace_transpose(
-          features_size, samples_size, devs, verbosity, &device_samples));
       auto asses_on_host =
           std::unique_ptr<uint32_t[]>(new uint32_t[samples_size]);
       cudaSetDevice(device_ptrs);
@@ -683,6 +681,8 @@ KMCUDAResult knn_cuda(
            kmcudaMemoryCopyError);
     );
   } else {
+    RETERR(cuda_transpose(
+        samples_size, features_size, false, devs, verbosity, &device_samples));
     FOR_EACH_DEVI(
       if (static_cast<int32_t>(devi) == origin_devi) {
         continue;

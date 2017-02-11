@@ -1075,8 +1075,8 @@ KMCUDAResult kmeans_cuda_yy(
           max_slength - h_clusters_size - h_yy_groups_size, true);
       tmpbufs2.emplace_back(tmpbufs.back().get() + h_clusters_size, true);
     }
-    RETERR(cuda_inplace_transpose(
-        h_clusters_size, h_features_size, devs, verbosity, centroids));
+    RETERR(cuda_transpose(
+        h_clusters_size, h_features_size, true, devs, verbosity, centroids));
     RETERR(kmeans_init_centroids(
         kmcudaInitMethodPlusPlus, nullptr, h_clusters_size, h_features_size,
         h_yy_groups_size, metric, 0, devs, -1, fp16x2, verbosity, nullptr,
@@ -1088,8 +1088,8 @@ KMCUDAResult kmeans_cuda_yy(
         metric, false, devs, fp16x2, verbosity, *centroids, centroids_yy,
         reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs2),
         reinterpret_cast<udevptrs<uint32_t> *>(&tmpbufs), assignments_yy));
-    RETERR(cuda_inplace_transpose(
-        h_features_size, h_clusters_size, devs, verbosity, centroids));
+    RETERR(cuda_transpose(
+        h_clusters_size, h_features_size, false, devs, verbosity, centroids));
   }
   FOR_EACH_DEV(
     CUCH(cudaMemcpyToSymbol(d_samples_size, &h_samples_size, sizeof(h_samples_size)),
