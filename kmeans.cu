@@ -680,9 +680,10 @@ __global__ void kmeans_calc_average_distance(
   volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
+    sample += offset;
     dist = METRIC<M, F>::distance_t(
         samples, centroids + assignments[sample] * d_features_size,
-        d_samples_size, sample + offset);
+        d_samples_size, sample);
   }
   float sum = warpReduceSum(dist);
   if (threadIdx.x % 32 == 0) {
