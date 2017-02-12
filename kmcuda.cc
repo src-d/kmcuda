@@ -267,7 +267,7 @@ KMCUDAResult kmeans_init_centroids(
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         if (dist_sum != dist_sum) {
           assert(dist_sum == dist_sum);
-          INFO("internal bug inside kmeans_init_centroids: dist_sum is NaN\n");
+          INFO("\ninternal bug inside kmeans_init_centroids: dist_sum is NaN\n");
         }
         double choice = ((rand() + .0) / RAND_MAX);
         uint32_t choice_approx = choice * samples_size;
@@ -297,7 +297,7 @@ KMCUDAResult kmeans_init_centroids(
         }
         if (j == 0 || j > samples_size) {
           assert(j > 0 && j <= samples_size);
-          INFO("internal bug in kmeans_init_centroids: j = %" PRIu32 "\n", j);
+          INFO("\ninternal bug in kmeans_init_centroids: j = %" PRIu32 "\n", j);
         }
         RETERR(cuda_copy_sample_t(
             j - 1, i * features_size, samples_size, features_size, devs,

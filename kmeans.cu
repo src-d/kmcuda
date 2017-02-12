@@ -48,9 +48,10 @@ __global__ void kmeans_plus_plus(
   float dist = 0;
   if (sample < length) {
     centroids += (cc - 1) * d_features_size;
-    if (_eq(samples[0], samples[0])) {
+    const uint32_t local_sample = sample + offset;
+    if (_eq(samples[local_sample], samples[local_sample])) {
       dist = METRIC<M, F>::distance_t(
-          samples, centroids, d_samples_size, sample + offset);
+          samples, centroids, d_samples_size, local_sample);
     }
     float prev_dist;
     if (cc == 1 || dist < (prev_dist = dists[sample])) {
@@ -229,12 +230,13 @@ __global__ void kmeans_assign_lloyd_smallc(
   F *csqrs = shared_centroids + cstep * d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
-  bool insane = _neq(samples[0], samples[0]);
+  const uint32_t local_sample = sample + offset;
+  bool insane = _neq(samples[local_sample], samples[local_sample]);
   F ssqr = _const<F>(0);
   const uint32_t soffset = threadIdx.x * d_features_size;
   if (!insane) {
     ssqr = METRIC<M, F>::sum_squares_t(
-        samples, shared_samples + soffset, d_samples_size, sample + offset);
+        samples, shared_samples + soffset, d_samples_size, local_sample);
   }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
@@ -305,10 +307,12 @@ __global__ void kmeans_assign_lloyd(
   F *csqrs = shared_centroids + cstep * d_features_size;
   const uint32_t size_each = cstep /
       min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
-  bool insane = _neq(samples[0], samples[0]);
+  const uint32_t local_sample = sample + offset;
+  bool insane = _neq(samples[local_sample], samples[local_sample]);
   F ssqr = _const<F>(0);
   if (!insane) {
-    ssqr = METRIC<M, F>::sum_squares_t(samples, nullptr, d_samples_size, sample);
+    ssqr = METRIC<M, F>::sum_squares_t(
+        samples, nullptr, d_samples_size, local_sample);
   }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
@@ -333,7 +337,7 @@ __global__ void kmeans_assign_lloyd(
       #pragma unroll 4
       for (uint64_t f = 0; f < d_features_size; f++) {
         F y = _fma(corr,
-                   samples[static_cast<uint64_t>(d_samples_size) * f + sample + offset],
+                   samples[static_cast<uint64_t>(d_samples_size) * f + local_sample],
                    shared_centroids[coffset + f]);
         F t = _add(product, y);
         corr = _sub(y, _sub(t, product));
