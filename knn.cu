@@ -42,7 +42,7 @@ __global__ void knn_calc_cluster_radiuses(
          ass++) {
        uint64_t sample = inv_asses[ass];  // uint64_t!
        sample_dists[sample] += METRIC<M, F>::partial_t(
-           my_cent, samples, fsize, d_samples_size, cfi, sample);
+           samples, my_cent, fsize, d_samples_size, cfi, sample);
     }
   }
   // stage 2 - find the maximum distance
