@@ -41,15 +41,16 @@ __constant__ int d_shmem_size;
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_plus_plus(
-    const uint32_t length, const uint32_t cc, const F *__restrict__ samples,
-    const F *__restrict__ centroids, float *__restrict__ dists,
-    float *dists_sum) {
+    const uint32_t offset, const uint32_t length, const uint32_t cc,
+    const F *__restrict__ samples, const F *__restrict__ centroids,
+    float *__restrict__ dists, float *__restrict__ dists_sum) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
     centroids += (cc - 1) * d_features_size;
     if (_eq(samples[0], samples[0])) {
-      dist = METRIC<M, F>::distance_t(samples, centroids, d_samples_size, sample);
+      dist = METRIC<M, F>::distance_t(
+          samples, centroids, d_samples_size, sample + offset);
     }
     float prev_dist;
     if (cc == 1 || dist < (prev_dist = dists[sample])) {
@@ -795,8 +796,8 @@ KMCUDAResult kmeans_cuda_plus_plus(
     dim3 block(BS_KMPP, 1, 1);
     dim3 grid(upper(length, block.x), 1, 1);
     KERNEL_SWITCH(kmeans_plus_plus, <<<grid, block>>>(
-        length, cc,
-        reinterpret_cast<const F*>(samples[devi].get() + offset * h_features_size),
+        offset, length, cc,
+        reinterpret_cast<const F*>(samples[devi].get()),
         reinterpret_cast<const F*>((*centroids)[devi].get()),
         (*dists)[devi].get(), dev_dists[devi].get()));
   );
