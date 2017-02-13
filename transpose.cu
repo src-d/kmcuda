@@ -13,33 +13,42 @@ __global__ void copy_sample_t(
   dest[ti] = samples[static_cast<uint64_t>(samples_size) * static_cast<uint64_t>(ti) + index];
 }
 
+template <bool xyswap>
 __global__ void transpose(
     const float *__restrict__ input, uint32_t rows, uint32_t cols,
     float *__restrict__ output) {
   __shared__ float tile[TILE_DIM][TILE_DIM + 1];
-  volatile uint64_t x = blockIdx.x * TILE_DIM + threadIdx.x;
-  volatile uint64_t y = blockIdx.y * TILE_DIM + threadIdx.y;
+  volatile uint32_t x = xyswap?
+      blockIdx.y * TILE_DIM + threadIdx.y:
+      blockIdx.x * TILE_DIM + threadIdx.x;
+  volatile uint32_t y = xyswap?
+      blockIdx.x * TILE_DIM + threadIdx.x:
+      blockIdx.y * TILE_DIM + threadIdx.y;
+  volatile uint32_t tx = xyswap? threadIdx.y : threadIdx.x;
+  volatile uint32_t ty = xyswap? threadIdx.x : threadIdx.y;
 
   if (x < cols && y < rows) {
     for (uint32_t j = 0;
-         j < min(static_cast<unsigned long>(TILE_DIM), rows - y);
+         j < min(static_cast<unsigned int>(TILE_DIM), rows - y);
          j += BLOCK_ROWS) {
-      tile[threadIdx.y + j][threadIdx.x] = input[
-          static_cast<uint64_t>(y + j) * cols + x];
+      tile[ty + j][tx] = input[static_cast<uint64_t>(y + j) * cols + x];
     }
   }
 
   __syncthreads();
 
-  x = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
-  y = blockIdx.x * TILE_DIM + threadIdx.y;
+  x = xyswap?
+      blockIdx.x * TILE_DIM + threadIdx.y:
+      blockIdx.y * TILE_DIM + threadIdx.x;
+  y = xyswap?
+      blockIdx.y * TILE_DIM + threadIdx.x:
+      blockIdx.x * TILE_DIM + threadIdx.y;
 
   if (x < rows && y < cols) {
     for (uint32_t j = 0;
-         j < min(static_cast<unsigned long>(TILE_DIM), cols - y);
+         j < min(static_cast<unsigned int>(TILE_DIM), cols - y);
          j += BLOCK_ROWS) {
-      output[static_cast<uint64_t>(y + j) * rows + x] =
-          tile[threadIdx.x][threadIdx.y + j];
+      output[static_cast<uint64_t>(y + j) * rows + x] = tile[tx][ty + j];
     }
   }
 }
@@ -78,12 +87,19 @@ KMCUDAResult cuda_transpose(
     cols = samples_size;
     rows = features_size;
   }
-  dim3 block(TILE_DIM, BLOCK_ROWS, 1);
-  dim3 grid(upper(cols, static_cast<uint32_t>(TILE_DIM)), upper(rows, static_cast<uint32_t>(TILE_DIM)), 1);
-  DEBUG("transpose <<<(%d, %d), (%d, %d)>>> %" PRIu32 ", %" PRIu32 "\n",
-        grid.x, grid.y, block.x, block.y, rows, cols);
+  int xdim = upper(cols, static_cast<uint32_t>(TILE_DIM));
+  int ydim = upper(rows, static_cast<uint32_t>(TILE_DIM));
+  bool xyswap = xdim < ydim;
+  dim3 block(xyswap? BLOCK_ROWS : TILE_DIM, xyswap? TILE_DIM : BLOCK_ROWS, 1);
+  dim3 grid(max(xdim, ydim), min(xdim, ydim), 1);
+  DEBUG("transpose <<<(%d, %d), (%d, %d)>>> %" PRIu32 ", %" PRIu32 ", %s\n",
+        grid.x, grid.y, block.x, block.y, rows, cols, xyswap? "xyswap" : "");
   FOR_EACH_DEVI(
-    transpose<<<grid, block>>>(ptr, rows, cols, (*samples)[devi].get());
+    if (xyswap) {
+      transpose<true><<<grid, block>>>(ptr, rows, cols, (*samples)[devi].get());
+    } else {
+      transpose<false><<<grid, block>>>(ptr, rows, cols, (*samples)[devi].get());
+    }
   );
   SYNC_ALL_DEVS;
   return kmcudaSuccess;
