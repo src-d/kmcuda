@@ -128,7 +128,8 @@ __global__ void kmeans_afkmc2_random_step(
       return;
     }
     for (uint32_t i = 0, si = threadIdx.x * size_each;
-         i < size_each && (si = threadIdx.x * size_each + i) < SHMEM_AFKMC2_RC;
+         i < size_each && (si = threadIdx.x * size_each + i) < SHMEM_AFKMC2_RC
+         && (sample + si) < d_samples_size;
          i++) {
       shared_q[si] = q[sample + si];
     }
