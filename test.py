@@ -295,6 +295,26 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
 
+    def test_kmeanspp_lloyd_uint32_overflow(self):
+        print("initializing samples...")
+        samples = numpy.empty((167772160, 8), dtype=numpy.float32)
+        tile = numpy.hstack((self.samples,) * 4)
+        for i in range(0, samples.shape[0], self.samples.shape[0]):
+            end = i + self.samples.shape[0]
+            if end < samples.shape[0]:
+                samples[i:end] = tile
+            else:
+                samples[i:] = tile[:samples.shape[0] - i]
+        print("running k-means...")
+        try:
+            with self.stdout:
+                centroids, assignments = kmeans_cuda(
+                    samples, 50, init="kmeans++", device=0,
+                    verbosity=2, seed=3, tolerance=0.142, yinyang_t=0)
+            self.assertEqual(self._get_iters_number(self.stdout), 2)
+        except MemoryError:
+            self.skipTest("Not enough GPU memory.")
+
     def test_random_lloyd_host_ptr(self):
         hostptr = (self.samples.__array_interface__["data"][0],
                    -1, self.samples.shape)
