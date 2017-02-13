@@ -232,11 +232,11 @@ __global__ void kmeans_assign_lloyd_smallc(
       min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
   const uint32_t local_sample = sample + offset;
   bool insane = _neq(samples[local_sample], samples[local_sample]);
-  F ssqr = _const<F>(0);
   const uint32_t soffset = threadIdx.x * d_features_size;
   if (!insane) {
-    ssqr = METRIC<M, F>::sum_squares_t(
-        samples, shared_samples + soffset, d_samples_size, local_sample);
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      shared_samples[soffset + f] = samples[f * d_samples_size + local_sample];
+    }
   }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
@@ -265,7 +265,7 @@ __global__ void kmeans_assign_lloyd_smallc(
         corr = _sub(y, _sub(t, product));
         product = t;
       }
-      HF dist = METRIC<M, F>::distance(ssqr, csqrs[c - gc], product);
+      HF dist = METRIC<M, F>::distance(_const<F>(0), csqrs[c - gc], product);
       if (_lt(dist, min_dist)) {
         min_dist = dist;
         nearest = c;
@@ -309,11 +309,6 @@ __global__ void kmeans_assign_lloyd(
       min(blockDim.x, length - blockIdx.x * blockDim.x) + 1;
   const uint32_t local_sample = sample + offset;
   bool insane = _neq(samples[local_sample], samples[local_sample]);
-  F ssqr = _const<F>(0);
-  if (!insane) {
-    ssqr = METRIC<M, F>::sum_squares_t(
-        samples, nullptr, d_samples_size, local_sample);
-  }
 
   for (uint32_t gc = 0; gc < d_clusters_size; gc += cstep) {
     uint32_t coffset = gc * d_features_size;
@@ -343,7 +338,7 @@ __global__ void kmeans_assign_lloyd(
         corr = _sub(y, _sub(t, product));
         product = t;
       }
-      HF dist = METRIC<M, F>::distance(ssqr, csqrs[c - gc], product);
+      HF dist = METRIC<M, F>::distance(_const<F>(0), csqrs[c - gc], product);
       if (_lt(dist, min_dist)) {
         min_dist = dist;
         nearest = c;
