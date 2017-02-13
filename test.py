@@ -145,6 +145,15 @@ class StdoutListener(object):
         return self._stdout
 
 
+def no_memcheck(fn):
+    def wrapped_no_memcheck(self, *args, **kwargs):
+        if os.getenv("CUDA_MEMCHECK", False):
+            self.skipTest("cuda-memcheck is disabled for this test %s"
+                          % fn.__name__)
+        return fn(self, *args, **kwargs)
+    return wrapped_no_memcheck
+
+
 class KmeansTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -295,6 +304,7 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
 
+    @no_memcheck
     def test_kmeanspp_lloyd_uint32_overflow(self):
         print("initializing samples...")
         samples = numpy.empty((167772160, 8), dtype=numpy.float32)
@@ -335,6 +345,7 @@ class KmeansTests(unittest.TestCase):
                 "bullshit", 50, init="random",
                 device=0, verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
 
+    @no_memcheck
     def test_random_lloyd_same_device_ptr(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -359,6 +370,7 @@ class KmeansTests(unittest.TestCase):
             cuda.api.free(cdevptr)
             cuda.api.free(adevptr)
 
+    @no_memcheck
     def test_random_lloyd_same_device_ptr_all_devs(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -386,6 +398,7 @@ class KmeansTests(unittest.TestCase):
             cuda.api.free(adevptr)
         self.assertTrue((self.samples.ravel() == new_samples.ravel()).all())
 
+    @no_memcheck
     def test_random_lloyd_different_device_ptr(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -676,6 +689,7 @@ class KnnTests(unittest.TestCase):
     def test_many_large_multiple_dev(self):
         self._test_large(50, 0)
 
+    @no_memcheck
     def _test_device_ptr(self, dev):
         cuda = CUDA()
         sdevptr = cuda.api.allocate(self.samples.size * 4, 0)
