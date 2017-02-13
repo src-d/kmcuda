@@ -43,7 +43,7 @@ template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_plus_plus(
     const uint32_t offset, const uint32_t length, const uint32_t cc,
     const F *__restrict__ samples, const F *__restrict__ centroids,
-    float *__restrict__ dists, float *__restrict__ dists_sum) {
+    float *__restrict__ dists, atomic_float *__restrict__ dists_sum) {
   uint32_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
@@ -70,7 +70,7 @@ template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_afkmc2_calc_q_dists(
     const uint32_t offset, const uint32_t length, uint32_t c1_index,
     const F *__restrict__ samples, float *__restrict__ dists,
-    float *dsum) {
+    atomic_float *__restrict__ dsum) {
   volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
@@ -675,7 +675,7 @@ template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_calc_average_distance(
     uint32_t offset, uint32_t length, const F *__restrict__ samples,
     const F *__restrict__ centroids, const uint32_t *__restrict__ assignments,
-    float *distance) {
+    atomic_float *distance) {
   volatile uint64_t sample = blockIdx.x * blockDim.x + threadIdx.x;
   float dist = 0;
   if (sample < length) {
@@ -775,7 +775,7 @@ KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t h_samples_size, uint32_t h_features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, float *host_dists, float *dist_sum) {
+    udevptrs<float> *dists, float *host_dists, atomic_float *dist_sum) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
   uint32_t max_len = 0;
   for (auto &p : plan) {
@@ -784,9 +784,9 @@ KMCUDAResult kmeans_cuda_plus_plus(
       max_len = len;
     }
   }
-  udevptrs<float> dev_dists;
-  CUMALLOC(dev_dists, sizeof(float));
-  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
+  udevptrs<atomic_float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(atomic_float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(atomic_float));
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
@@ -812,13 +812,13 @@ KMCUDAResult kmeans_cuda_plus_plus(
         length * sizeof(float), cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
     dist_offset += grid.x;
   );
-  float sum = 0;
+  atomic_float sum = 0;
   FOR_EACH_DEVI(
     if (std::get<1>(plan[devi]) == 0) {
       continue;
     }
-    float hdist;
-    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+    atomic_float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(atomic_float),
                     cudaMemcpyDeviceToHost),
          kmcudaMemoryCopyError);
     sum += hdist;
@@ -833,9 +833,9 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *d_q,
     float *h_q) {
   auto plan = distribute(h_samples_size, h_features_size * sizeof(float), devs);
-  udevptrs<float> dev_dists;
-  CUMALLOC(dev_dists, sizeof(float));
-  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
+  udevptrs<atomic_float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(atomic_float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(atomic_float));
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plan[devi];
@@ -853,13 +853,13 @@ KMCUDAResult kmeans_cuda_afkmc2_calc_q(
         (*d_q)[devi].get(), dev_dists[devi].get()));
 
   );
-  float dists_sum = 0;
+  atomic_float dists_sum = 0;
   FOR_EACH_DEVI(
     if (std::get<1>(plan[devi]) == 0) {
       continue;
     }
-    float hdist;
-    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+    atomic_float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(atomic_float),
                     cudaMemcpyDeviceToHost),
          kmcudaMemoryCopyError);
     dists_sum += hdist;
@@ -1270,9 +1270,9 @@ KMCUDAResult kmeans_cuda_calc_average_distance(
     float *average_distance) {
   INFO("calculating the average distance...\n");
   auto plans = distribute(h_samples_size, h_features_size * sizeof(float), devs);
-  udevptrs<float> dev_dists;
-  CUMALLOC(dev_dists, sizeof(float));
-  CUMEMSET_ASYNC(dev_dists, 0, sizeof(float));
+  udevptrs<atomic_float> dev_dists;
+  CUMALLOC(dev_dists, sizeof(atomic_float));
+  CUMEMSET_ASYNC(dev_dists, 0, sizeof(atomic_float));
   FOR_EACH_DEVI(
     uint32_t offset, length;
     std::tie(offset, length) = plans[devi];
@@ -1287,10 +1287,10 @@ KMCUDAResult kmeans_cuda_calc_average_distance(
         reinterpret_cast<const F*>(centroids[devi].get()),
         assignments[devi].get(), dev_dists[devi].get()));
   );
-  float sum = 0;
+  atomic_float sum = 0;
   FOR_EACH_DEVI(
-    float hdist;
-    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(float),
+    atomic_float hdist;
+    CUCH(cudaMemcpy(&hdist, dev_dists[devi].get(), sizeof(atomic_float),
                     cudaMemcpyDeviceToHost),
          kmcudaMemoryCopyError);
     sum += hdist;

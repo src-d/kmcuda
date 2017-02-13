@@ -260,7 +260,7 @@ KMCUDAResult kmeans_init_centroids(
           printf("\rstep %d", i);
           fflush(stdout);
         }
-        float dist_sum = 0;
+        atomic_float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
             samples_size, features_size, i, metric, devs, fp16x2, verbosity,
             samples, centroids, dists, host_dists.get(), &dist_sum),
