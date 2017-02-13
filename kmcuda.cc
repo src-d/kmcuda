@@ -474,6 +474,10 @@ KMCUDAResult kmeans_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStop());
   #endif
+  if (origin_devi >= 0 || device_ptrs >= 0) {
+    RETERR(cuda_transpose(
+        samples_size, features_size, false, devs, verbosity, &device_samples));
+  }
   if (origin_devi < 0) {
     if (device_ptrs < 0) {
       CUCH(cudaMemcpy(centroids, device_centroids[devs.back()].get(),
@@ -483,8 +487,6 @@ KMCUDAResult kmeans_cuda(
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
-      RETERR(cuda_transpose(
-          samples_size, features_size, false, devs, verbosity, &device_samples));
       CUCH(cudaMemcpyPeerAsync(centroids, device_ptrs,
                                device_centroids[devs.size() - 1].get(),
                                devs.back(), centroids_size * sizeof(float)),
