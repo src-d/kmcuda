@@ -6,7 +6,11 @@
 #include <tuple>
 #include "wrappers.h"
 
-typedef unsigned long long cuint64_t;
+#if CUDA_ARCH >= 60
+typedef double atomic_float;
+#else
+typedef float atomic_float;
+#endif
 
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 #define DEBUG(...) do { if (verbosity > 1) { printf(__VA_ARGS__); } } while (false)
@@ -250,11 +254,20 @@ inline void print_plan(
 
 extern "C" {
 
+KMCUDAResult cuda_copy_sample_t(
+    uint32_t index, uint32_t offset, uint32_t samples_size, uint16_t features_size,
+    const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
+    udevptrs<float> *dest);
+
+KMCUDAResult cuda_transpose(
+    uint32_t samples_size, uint16_t features_size, bool forward,
+    const std::vector<int> &devs, int verbosity, udevptrs<float> *samples);
+
 KMCUDAResult kmeans_cuda_plus_plus(
     uint32_t samples_size, uint32_t features_size, uint32_t cc,
     KMCUDADistanceMetric metric, const std::vector<int> &devs, int fp16x2,
     int verbosity, const udevptrs<float> &samples, udevptrs<float> *centroids,
-    udevptrs<float> *dists, float *host_dists, float *dists_sum);
+    udevptrs<float> *dists, float *host_dists, atomic_float *dists_sum);
 
 KMCUDAResult kmeans_cuda_afkmc2_calc_q(
     uint32_t samples_size, uint32_t features_size, uint32_t firstc,

@@ -35,6 +35,23 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
     return ssqr;
   }
 
+  FPATTR static F sum_squares_t(
+      const F *__restrict__ vec, F *__restrict__ cache, uint64_t size, uint64_t index) {
+    F ssqr = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      F v = vec[f * size + index];
+      if (cache) {
+        cache[f] = v;
+      }
+      F y = _fma(corr, v, v);
+      F t = _add(ssqr, y);
+      corr = _sub(y, _sub(t, ssqr));
+      ssqr = t;
+    }
+    return ssqr;
+  }
+
   FPATTR static typename HALF<F>::type distance(F sqr1, F sqr2, F prod) {
     return _fin(_fma(_add(sqr1, sqr2), _const<F>(-2), prod));
   }
@@ -43,8 +60,38 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
     // Kahan summation with inverted c
     F dist = _const<F>(0), corr = _const<F>(0);
     #pragma unroll 4
-    for (uint16_t f = 0; f < d_features_size; f++) {
+    for (int f = 0; f < d_features_size; f++) {
       F d = _sub(v1[f], v2[f]);
+      F y = _fma(corr, d, d);
+      F t = _add(dist, y);
+      corr = _sub(y, _sub(t, dist));
+      dist = t;
+    }
+    return _sqrt(_float(_fin(dist)));
+  }
+
+  FPATTR static float distance_t(const F *__restrict__ v1, const F *__restrict__ v2,
+                                 uint64_t v1_size, uint64_t v1_index) {
+    // Kahan summation with inverted c
+    F dist = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      F d = _sub(v1[v1_size * f + v1_index], v2[f]);
+      F y = _fma(corr, d, d);
+      F t = _add(dist, y);
+      corr = _sub(y, _sub(t, dist));
+      dist = t;
+    }
+    return _sqrt(_float(_fin(dist)));
+  }
+
+  FPATTR static float distance_tt(const F *__restrict__ v, uint64_t size,
+                                  uint64_t index1, uint64_t index2) {
+    // Kahan summation with inverted c
+    F dist = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      F d = _sub(v[size * f + index1], v[size * f + index2]);
       F y = _fma(corr, d, d);
       F t = _add(dist, y);
       corr = _sub(y, _sub(t, dist));
@@ -58,8 +105,24 @@ struct METRIC<kmcudaDistanceMetricL2, F> {
     // Kahan summation with inverted c
     F dist = _const<F>(0), corr = _const<F>(0);
     #pragma unroll 4
-    for (uint16_t f = 0; f < size; f++) {
+    for (int f = 0; f < size; f++) {
       F d = _sub(v1[f], v2[f]);
+      F y = _fma(corr, d, d);
+      F t = _add(dist, y);
+      corr = _sub(y, _sub(t, dist));
+      dist = t;
+    }
+    return _float(_fin(dist));
+  }
+
+  FPATTR static float partial_t(
+      const F *__restrict__ v1, const F *__restrict__ v2, uint16_t f_size,
+      uint64_t v1_size, uint64_t v1_offset, uint64_t v1_index) {
+    // Kahan summation with inverted c
+    F dist = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (int f = 0; f < f_size; f++) {
+      F d = _sub(v1[v1_size * (f + v1_offset) + v1_index], v2[f]);
       F y = _fma(corr, d, d);
       F t = _add(dist, y);
       corr = _sub(y, _sub(t, dist));
@@ -87,8 +150,19 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
       const F *__restrict__ vec, F *__restrict__ cache) {
     if (cache) {
       #pragma unroll 4
-      for (uint16_t f = 0; f < d_features_size; f++) {
+      for (int f = 0; f < d_features_size; f++) {
         cache[f] = vec[f];
+      }
+    }
+    return _const<F>(1);
+  }
+
+  FPATTR static F sum_squares_t(
+      const F *__restrict__ vec, F *__restrict__ cache, uint64_t size, uint64_t index) {
+    if (cache) {
+      #pragma unroll 4
+      for (uint64_t f = 0; f < d_features_size; f++) {
+        cache[f] = vec[f * size + index];
       }
     }
     return _const<F>(1);
@@ -106,8 +180,36 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
     // Kahan summation with inverted c
     F prod = _const<F>(0), corr = _const<F>(0);
     #pragma unroll 4
-    for (uint16_t f = 0; f < d_features_size; f++) {
+    for (int f = 0; f < d_features_size; f++) {
       F yprod = _fma(corr, v1[f], v2[f]);
+      F tprod = _add(prod, yprod);
+      corr = _sub(yprod, _sub(tprod, prod));
+      prod = tprod;
+    }
+    return _float(distance(_const<F>(1), _const<F>(1), prod));
+  }
+
+  FPATTR static float distance_t(const F *__restrict__ v1, const F *__restrict__ v2,
+                                 uint64_t v1_size, uint64_t v1_index) {
+    // Kahan summation with inverted c
+    F prod = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      F yprod = _fma(corr, v1[v1_size * f + v1_index], v2[f]);
+      F tprod = _add(prod, yprod);
+      corr = _sub(yprod, _sub(tprod, prod));
+      prod = tprod;
+    }
+    return _float(distance(_const<F>(1), _const<F>(1), prod));
+  }
+
+  FPATTR static float distance_tt(const F *__restrict__ v, uint64_t size,
+                                  uint64_t index1, uint64_t index2) {
+    // Kahan summation with inverted c
+    F prod = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (uint64_t f = 0; f < d_features_size; f++) {
+      F yprod = _fma(corr, v[size * f + index1], v[size * f + index2]);
       F tprod = _add(prod, yprod);
       corr = _sub(yprod, _sub(tprod, prod));
       prod = tprod;
@@ -120,8 +222,23 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
     // Kahan summation with inverted c
     F prod = _const<F>(0), corr = _const<F>(0);
     #pragma unroll 4
-    for (uint16_t f = 0; f < size; f++) {
+    for (int f = 0; f < size; f++) {
       F yprod = _fma(corr, v1[f], v2[f]);
+      F tprod = _add(prod, yprod);
+      corr = _sub(yprod, _sub(tprod, prod));
+      prod = tprod;
+    }
+    return _float(_fin(prod));
+  }
+
+  FPATTR static float partial_t(
+      const F *__restrict__ v1, const F *__restrict__ v2, uint16_t f_size,
+      uint64_t v1_size, uint64_t v1_offset, uint64_t v1_index) {
+    // Kahan summation with inverted c
+    F prod = _const<F>(0), corr = _const<F>(0);
+    #pragma unroll 4
+    for (int f = 0; f < f_size; f++) {
+      F yprod = _fma(corr, v1[v1_size * (f + v1_offset) + v1_index], v2[f]);
       F tprod = _add(prod, yprod);
       corr = _sub(yprod, _sub(tprod, prod));
       prod = tprod;
