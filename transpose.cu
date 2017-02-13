@@ -92,8 +92,8 @@ KMCUDAResult cuda_transpose(
   bool xyswap = xdim < ydim;
   dim3 block(xyswap? BLOCK_ROWS : TILE_DIM, xyswap? TILE_DIM : BLOCK_ROWS, 1);
   dim3 grid(max(xdim, ydim), min(xdim, ydim), 1);
-  DEBUG("transpose <<<(%d, %d), (%d, %d)>>> %" PRIu32 ", %" PRIu32 ", %s\n",
-        grid.x, grid.y, block.x, block.y, rows, cols, xyswap? "xyswap" : "");
+  DEBUG("transpose <<<(%d, %d), (%d, %d)>>> %" PRIu32 ", %" PRIu32 "%s\n",
+        grid.x, grid.y, block.x, block.y, rows, cols, xyswap? ", xyswap" : "");
   FOR_EACH_DEVI(
     if (xyswap) {
       transpose<true><<<grid, block>>>(ptr, rows, cols, (*samples)[devi].get());

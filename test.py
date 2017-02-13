@@ -379,7 +379,7 @@ class KmeansTests(unittest.TestCase):
                 adevptr, 13000, numpy.uint32)
             self._validate(centroids, assignments, 0.05)
             new_samples = cuda.api.copy_to_host(
-                devptr, self.samples.size * 4, numpy.float32)
+                devptr, self.samples.size, numpy.float32)
         finally:
             cuda.api.free(devptr)
             cuda.api.free(cdevptr)
