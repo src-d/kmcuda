@@ -11,6 +11,11 @@ algorithm. K-nearest neighbors employ the same triangle inequality idea and
 require precalculated centroids and cluster assignments, similar to a flattened
 ball tree.
 
+| [Benchmarks](#benchmarks) | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
+|---------------------------|----------------|-----------|------------------|--------|--------|--------------|
+| time, s                   | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
+| memory, GB                | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+
 Technically, this project is a library which exports the two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
 It has the built-in Python3 native extension support, so you can
@@ -131,6 +136,36 @@ Testing
 `test.py` contains the unit tests based on [unittest](https://docs.python.org/3/library/unittest.html).
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
+
+Benchmarks
+----------
+
+### 100000x256@1024
+Comparison of some KMeans implementations:
+
+|             | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
+|-------------|----------------|-----------|------------------|--------|--------|--------------|
+| time, s     | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
+| memory, GB  | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+
+#### Configuration
+* 16-core (32 threads) Intel Xeon E5-2620 v4 @ 2.10GHz
+* 256 GB RAM Samsung M393A2K40BB1
+* Nvidia Titan X 2016
+
+#### Contestants
+* [sklearn.cluster.KMeans](http://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html)@0.18.1; `KMeans(n_clusters=1024, init="random", max_iter=15, random_state=0, n_jobs=1, n_init=1)`.
+* [KMeansRex](https://github.com/michaelchughes/KMeansRex)@288c40a with `-march-native` and Eigen 3.3; `KMeansRex.RunKMeans(data, 1024, Niter=15, initname=b"random")`.
+* KMeansRex with additional `-fopenmp`.
+* [Serban KMeans](https://github.com/serban/kmeans)@83e76bf built for arch 6.1; `./cuda_main  -b -i serban.bin -n 1024 -t 0.0028 -o`
+* kmcuda v6.1 built for arch 6.1; `libKMCUDA.kmeans_cuda(dataset, 1024, tolerance=0.002, seed=777, init="random", verbosity=2, yinyang_t=0, device=0)`
+* kmcuda running on 2 GPUs.
+
+#### Data
+100000 random samples uniformly distributed between 0 and 1 in 256 dimensions.
+
+#### Notes
+100000 is the maximum size Serban KMeans can handle.
 
 Python examples
 ---------------
