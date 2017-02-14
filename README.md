@@ -1,7 +1,9 @@
-[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda) [![PyPI](https://img.shields.io/pypi/v/libKMCUDA.svg)](https://pypi.python.org/pypi/libKMCUDA)
+[![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda) [![PyPI](https://img.shields.io/pypi/v/libKMCUDA.svg)](https://pypi.python.org/pypi/libKMCUDA) [![10.5281/zenodo.286944](https://zenodo.org/badge/DOI/10.5281/zenodo.286944.svg)](https://doi.org/10.5281/zenodo.286944)
 
 "Yinyang" K-means and K-nn using NVIDIA CUDA
 ============================================
+
+![source{d}](img/sourced.png)
 
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
 of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
@@ -11,10 +13,39 @@ algorithm. K-nearest neighbors employ the same triangle inequality idea and
 require precalculated centroids and cluster assignments, similar to a flattened
 ball tree.
 
+| [Benchmarks](#benchmarks) | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
+|---------------------------|----------------|-----------|------------------|--------|--------|--------------|
+| speed                     | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x        |
+| memory                    | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x         |
+
 Technically, this project is a library which exports the two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
 It has the built-in Python3 native extension support, so you can
 `from libKMCUDA import kmeans_cuda`.
+
+Table of contents
+-----------------
+* [K-means](#k-means)
+* [K-nn](#k-nn)
+* [Notes](#notes)
+* [Building](#building)
+      * [macOS](#macos)
+* [Testing](#testing)
+* [Benchmarks](#benchmarks)
+   * [100000x256@1024](#100000x2561024)
+      * [Configuration](#configuration)
+      * [Contestants](#contestants)
+      * [Data](#data)
+      * [Notes](#notes-1)
+* [Python examples](#python-examples)
+      * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
+      * [K-means, angular (cosine) distance   average](#k-means-angular-cosine-distance--average)
+      * [K-nn](#k-nn-1)
+* [Python API](#python-api)
+* [C examples](#c-examples)
+* [C API](#c-api)
+* [How "source{d}" image was created?](#how-sourced-image-was-created)
+* [License](#license)
 
 K-means
 -------
@@ -34,7 +65,7 @@ they can be utilized together and it gives the corresponding linear speedup
 either for Lloyd or Yinyang.
 
 The code has been thoroughly tested to yield bit-to-bit identical
-results from Yinyang and Lloyd. AFKMC2 was converted from
+results from Yinyang and Lloyd. "Fast and Provably Good Seedings for k-Means" was adapted from
 [the reference code](https://github.com/obachem/kmc2).
 
 Read the articles: [1](http://blog.sourced.tech/post/towards_kmeans_on_gpu/),
@@ -88,13 +119,13 @@ Building
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
-It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler.
-If [numpy](http://www.numpy.org/) headers are not found,
-specify the includes path with defining `NUMPY_INCLUDES`.
+It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler. The build has
+been tested primarily on Linux but it works on macOS too with some blows and whistles
+(see "macOS" subsection).
 If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
 If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
 (change the path to the actual one). By default, CUDA kernels are compiled for
-the architecture 60 (Pascal). It is possible to override it via `-DCUDA_ARCH=52`,
+the architecture 60 (Pascal). It is possible to override it via `-D CUDA_ARCH=52`,
 but fp16 support will be disabled then.
 
 Python users: if you are using Linux x86-64 and CUDA 8.0, then you can
@@ -107,11 +138,60 @@ Otherwise, you'll have to install it from source:
 pip install git+https://github.com/src-d/kmcuda.git
 ```
 
+#### macOS
+Install [Homebrew](http://brew.sh/) and the [Command Line Developer Tools](https://developer.apple.com/download/more/)
+which are compatible with your CUDA installation. E.g., CUDA 8.0 does not support
+the latest 8.x and works with 7.3.1 and below. Install `clang` with OpenMP support
+and Python with numpy:
+```
+brew install llvm --with-clang
+brew install python3
+pip3 install numpy
+```
+Execute this magic command which builds kmcuda afterwards:
+```
+CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release ..
+```
+And make the last important step - rename \*.dylib to \*.so so that Python is able to import the native extension:
+```
+mv libKMCUDA.{dylib,so}
+```
+
 Testing
 -------
 `test.py` contains the unit tests based on [unittest](https://docs.python.org/3/library/unittest.html).
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
+
+Benchmarks
+----------
+
+### 100000x256@1024
+Comparison of some KMeans implementations:
+
+|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
+|------------|----------------|-----------|------------------|--------|--------|--------------|
+| time, s    | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
+| memory, GB | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+
+#### Configuration
+* 16-core (32 threads) Intel Xeon E5-2620 v4 @ 2.10GHz
+* 256 GB RAM Samsung M393A2K40BB1
+* Nvidia Titan X 2016
+
+#### Contestants
+* [sklearn.cluster.KMeans](http://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html)@0.18.1; `KMeans(n_clusters=1024, init="random", max_iter=15, random_state=0, n_jobs=1, n_init=1)`.
+* [KMeansRex](https://github.com/michaelchughes/KMeansRex)@288c40a with `-march-native` and Eigen 3.3; `KMeansRex.RunKMeans(data, 1024, Niter=15, initname=b"random")`.
+* KMeansRex with additional `-fopenmp`.
+* [Serban KMeans](https://github.com/serban/kmeans)@83e76bf built for arch 6.1; `./cuda_main  -b -i serban.bin -n 1024 -t 0.0028 -o`
+* kmcuda v6.1 built for arch 6.1; `libKMCUDA.kmeans_cuda(dataset, 1024, tolerance=0.002, seed=777, init="random", verbosity=2, yinyang_t=0, device=0)`
+* kmcuda running on 2 GPUs.
+
+#### Data
+100000 random samples uniformly distributed between 0 and 1 in 256 dimensions.
+
+#### Notes
+100000 is the maximum size Serban KMeans can handle.
 
 Python examples
 ---------------
@@ -235,7 +315,7 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
               2 means lots of output.
-              
+
 **return** tuple(centroids, assignments). If **samples** was a numpy array or
            a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
            (integers) allocated on the same device. If **samples** are float16,
@@ -279,6 +359,70 @@ def knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosit
             raw pointer (integer) allocated on the same device. The shape is
             (number of samples, k).
 
+C examples
+----------
+`example.c`:
+```C
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <kmcuda.h>
+
+// ./example /path/to/data <number of clusters>
+int main(int argc, const char **argv) {
+  assert(argc == 3);
+  // we open the binary file with the data
+  // [samples_size][features_size][samples_size x features_size]
+  FILE *fin = fopen(argv[1], "rb");
+  assert(fin);
+  uint32_t samples_size, features_size;
+  assert(fread(&samples_size, sizeof(samples_size), 1, fin) == 1);
+  assert(fread(&features_size, sizeof(features_size), 1, fin) == 1);
+  uint64_t total_size = ((uint64_t)samples_size) * features_size;
+  float *samples = malloc(total_size * sizeof(float));
+  assert(samples);
+  assert(fread(samples, sizeof(float), total_size, fin) == total_size);
+  fclose(fin);
+  int clusters_size = atoi(argv[2]);
+  // we will store cluster centers here
+  float *centroids = malloc(clusters_size * features_size * sizeof(float));
+  assert(centroids);
+  // we will store assignments of every sample here
+  uint32_t *assignments = malloc(((uint64_t)samples_size) * sizeof(uint32_t));
+  assert(assignments);
+  float average_distance;
+  KMCUDAResult result = kmeans_cuda(
+      kmcudaInitMethodPlusPlus, NULL,  // kmeans++ centroids initialization
+      0.01,                            // less than 1% of the samples are reassigned in the end
+      0.1,                             // activate Yinyang refinement with 0.1 threshold
+      kmcudaDistanceMetricL2,          // Euclidean distance
+      samples_size, features_size, clusters_size,
+      0xDEADBEEF,                      // random generator seed
+      0,                               // use all available CUDA devices
+      -1,                              // samples are supplied from host
+      0,                               // not in float16x2 mode
+      1,                               // moderate verbosity
+      samples, centroids, assignments, &average_distance);
+  free(samples);
+  free(centroids);
+  free(assignments);
+  assert(result == kmcudaSuccess);
+  printf("Average distance between a centroid and the corresponding "
+         "cluster members: %f\n", average_distance);
+  return 0;
+}
+```
+Build:
+```
+gcc -std=c99 -O2 example.c -I/path/to/kmcuda.h/dir -L/path/to/libKMCUDA.so/dir -l KMCUDA -Wl,-rpath,. -o example
+```
+Run:
+```
+./example serban.bin 1024
+```
+The file format is the same as in [serban/kmeans](https://github.com/serban/kmeans/blob/master/README#L113).
+
 C API
 -----
 ```C
@@ -318,7 +462,7 @@ KMCUDAResult kmeans_cuda(
                 to be a pointer to device #0's memory and the resulting **centroids** and
                 **assignments** are expected to be preallocated on device #0 as well.
                 Usually this value is -1.
-                
+
 **fp16x2** activates fp16 mode, two half-floats are packed into a single 32-bit float,
            features_size becomes effectively 2 times bigger, the returned
            centroids are fp16x2 too.
@@ -346,7 +490,7 @@ KMCUDAResult knn_cuda(
     const float *samples, const float *centroids, const uint32_t *assignments,
     uint32_t *neighbors);
 ```
-
+**k** integer, the number of neighbors to search for each sample.
 
 **metric** The distance metric to use. The default is Euclidean (L2), can be
            changed to cosine to behave as Spherical K-means with the angular
@@ -388,6 +532,10 @@ KMCUDAResult knn_cuda(
               samples_size x k in row major format.
 
 Returns KMCUDAResult (see `kmcuda.h`);
+
+How "source{d}" image was created?
+----------------------------------
+Check out this [notebook](img/kmeans_image.ipynb).
 
 License
 -------

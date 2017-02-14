@@ -7,9 +7,12 @@ from shutil import copyfile
 from subprocess import check_call
 from sys import platform
 
+class SetupConfigurationError(Exception):
+    pass
+
 
 class CMakeBuild(build_py):
-    SHLIBEXT = "dylib" if platform == "darwin" else "so"
+    SHLIB = "libKMCUDA.so"
 
     def run(self):
         if not self.dry_run:
@@ -22,16 +25,27 @@ class CMakeBuild(build_py):
         return outputs
 
     def _build(self, builddir=None):
-        check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCUDA_TOOLKIT_ROOT_DIR=%s" % os.getenv(
-                        "CUDA_TOOLKIT_ROOT_DIR",
-                        "must_export_CUDA_TOOLKIT_ROOT_DIR"),
-                    "."))
+        if platform != "darwin":
+            cuda_toolkit_dir = os.getenv("CUDA_TOOLKIT_ROOT_DIR")
+            if cuda_toolkit_dir is None:
+                raise SetupConfigurationError(
+                    "CUDA_TOOLKIT_ROOT_DIR environment variable must be defined")
+            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
+                        "-DCUDA_TOOLKIT_ROOT_DIR=%s" % cuda_toolkit_dir,
+                        "."))
+        else:
+            ccbin = os.getenv("CUDA_HOST_COMPILER", "/usr/bin/clang")
+            env = dict(os.environ)
+            env.setdefault("CC", "/usr/local/opt/llvm/bin/clang")
+            env.setdefault("CXX", "/usr/local/opt/llvm/bin/clang++")
+            env.setdefault("LDFLAGS", "-L/usr/local/opt/llvm/lib/")
+            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
+                        "-DCUDA_HOST_COMPILER=%s" % ccbin,
+                        "-DSUFFIX=.so", "."), env=env)
         check_call(("make", "-j%d" % cpu_count()))
         self.mkpath(self.build_lib)
-        shlib = "libKMCUDA." + self.SHLIBEXT
-        dest = os.path.join(self.build_lib, shlib)
-        copyfile(shlib, dest)
+        dest = os.path.join(self.build_lib, self.SHLIB)
+        copyfile(self.SHLIB, dest)
         self._shared_lib = [dest]
 
 
@@ -46,7 +60,7 @@ class BinaryDistribution(Distribution):
 setup(
     name="libKMCUDA",
     description="Accelerated K-means and K-nn on GPU",
-    version="6.0.0",
+    version="6.1.0",
     license="MIT",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",

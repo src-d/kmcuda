@@ -1,4 +1,11 @@
 .idea
+**/CMakeCache.txt
+**/CMakeFiles
+**/.DS_Store
+**/Makefile
+**/cmake_install.cmake
+**/dist
+**/libKMCUDA.egg-info
 # Compiled Object files
 *.slo
 *.lo

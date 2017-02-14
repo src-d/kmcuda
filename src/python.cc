@@ -1,4 +1,5 @@
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <Python.h>
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION

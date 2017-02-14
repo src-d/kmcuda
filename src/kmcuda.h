@@ -3,28 +3,30 @@
 
 #include <stdint.h>
 
-enum KMCUDAResult {
+typedef enum {
   kmcudaSuccess = 0,
   kmcudaInvalidArguments,
   kmcudaNoSuchDevice,
   kmcudaMemoryAllocationFailure,
   kmcudaRuntimeError,
   kmcudaMemoryCopyError
-};
+} KMCUDAResult;
 
-enum KMCUDAInitMethod {
+typedef enum {
   kmcudaInitMethodRandom = 0,
   kmcudaInitMethodPlusPlus,
   kmcudaInitMethodAFKMC2,
   kmcudaInitMethodImport
-};
+} KMCUDAInitMethod;
 
-enum KMCUDADistanceMetric {
+typedef enum {
   kmcudaDistanceMetricL2,
   kmcudaDistanceMetricCosine
-};
+} KMCUDADistanceMetric;
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 
 /// @brief Performs K-means clustering on GPU / CUDA.
 /// @param init centroids initialization method.
@@ -96,6 +98,8 @@ KMCUDAResult knn_cuda(
     const float *samples, const float *centroids, const uint32_t *assignments,
     uint32_t *neighbors);
 
+#ifdef __cplusplus
 }  // extern "C"
+#endif
 
 #endif //KMCUDA_KMCUDA_H

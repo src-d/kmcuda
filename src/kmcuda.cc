@@ -37,9 +37,6 @@ static KMCUDAResult check_kmeans_args(
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
   }
-  if (device < 0) {
-    return kmcudaNoSuchDevice;
-  }
   int devices = 0;
   cudaGetDeviceCount(&devices);
   if (device > (1u << devices)) {
@@ -68,7 +65,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
   if (device == 0) {
     cudaGetDeviceCount(reinterpret_cast<int *>(&device));
     if (device == 0) {
-      return std::move(devs);
+      return devs;
     }
     device = (1u << device) - 1;
   }
@@ -135,7 +132,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
     // remove device_ptrs - it is not in the devices list
     devs.pop_back();
   }
-  return std::move(devs);
+  return devs;
 }
 
 template <typename T>
@@ -225,29 +222,28 @@ KMCUDAResult kmeans_init_centroids(
         chosen[s] = s;
       }
       std::random_shuffle(chosen.begin(), chosen.end());
-      DEBUG("shuffle complete, copying to device(s)\n");
-      FOR_EACH_DEVI(
-        for (uint32_t c = 0; c < clusters_size; c++) {
-          CUCH(cudaMemcpyAsync(
-              (*centroids)[devi].get() + c * features_size,
-              samples[devi].get() + static_cast<int64_t>(chosen[c]) * features_size,
-              features_size * sizeof(float),
-              cudaMemcpyDeviceToDevice), kmcudaMemoryCopyError);
-        }
-      );
+      DEBUG("shuffle complete, copying to device(s)...\n");
+      for (uint32_t c = 0; c < clusters_size; c++) {
+        RETERR(cuda_copy_sample_t(
+            chosen[c], c * features_size, samples_size, features_size, devs,
+            verbosity, samples, centroids));
+      }
+      SYNC_ALL_DEVS;
       break;
     }
     case kmcudaInitMethodPlusPlus: {
-      INFO("performing kmeans++...\n");
       float smoke = NAN;
-      uint32_t first_offset;
+      uint32_t first_index;
       while (smoke != smoke) {
-        first_offset = (rand() % samples_size) * features_size;
+        first_index = rand() % samples_size;
         cudaSetDevice(devs[0]);
-        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_offset, sizeof(float),
+        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_index, sizeof(float),
                         cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
       }
-      CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
+      RETERR(cuda_copy_sample_t(
+            first_index, 0, samples_size, features_size, devs, verbosity,
+            samples, centroids));
+      INFO("performing kmeans++...\n");
       std::unique_ptr<float[]> host_dists(new float[samples_size]);
       if (verbosity > 2) {
         printf("kmeans++: dump %" PRIu32 " %" PRIu32 " %p\n",
@@ -264,14 +260,14 @@ KMCUDAResult kmeans_init_centroids(
           printf("\rstep %d", i);
           fflush(stdout);
         }
-        float dist_sum = 0;
+        atomic_float dist_sum = 0;
         RETERR(kmeans_cuda_plus_plus(
             samples_size, features_size, i, metric, devs, fp16x2, verbosity,
             samples, centroids, dists, host_dists.get(), &dist_sum),
                DEBUG("\nkmeans_cuda_plus_plus failed\n"));
         if (dist_sum != dist_sum) {
           assert(dist_sum == dist_sum);
-          INFO("internal bug inside kmeans_init_centroids: dist_sum is NaN\n");
+          INFO("\ninternal bug inside kmeans_init_centroids: dist_sum is NaN\n");
         }
         double choice = ((rand() + .0) / RAND_MAX);
         uint32_t choice_approx = choice * samples_size;
@@ -301,11 +297,13 @@ KMCUDAResult kmeans_init_centroids(
         }
         if (j == 0 || j > samples_size) {
           assert(j > 0 && j <= samples_size);
-          INFO("internal bug in kmeans_init_centroids: j = %" PRIu32 "\n", j);
+          INFO("\ninternal bug in kmeans_init_centroids: j = %" PRIu32 "\n", j);
         }
-        CUMEMCPY_D2D_ASYNC(*centroids, i * features_size, samples,
-                           (j - 1) * features_size, features_size);
+        RETERR(cuda_copy_sample_t(
+            j - 1, i * features_size, samples_size, features_size, devs,
+            verbosity, samples, centroids));
       }
+      SYNC_ALL_DEVS;
       break;
     }
     case kmcudaInitMethodAFKMC2: {
@@ -318,19 +316,21 @@ KMCUDAResult kmeans_init_centroids(
         return kmcudaInvalidArguments;
       }
       float smoke = NAN;
-      uint32_t first_offset;
+      uint32_t first_index;
       while (smoke != smoke) {
-        first_offset = (rand() % samples_size) * features_size;
+        first_index = rand() % samples_size;
         cudaSetDevice(devs[0]);
-        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_offset, sizeof(float),
+        CUCH(cudaMemcpy(&smoke, samples[0].get() + first_index, sizeof(float),
                         cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
       }
       INFO("afkmc2: calculating q (c0 = %" PRIu32 ")... ",
-           first_offset / features_size);
-      CUMEMCPY_D2D_ASYNC(*centroids, 0, samples, first_offset, features_size);
+           first_index / features_size);
+      RETERR(cuda_copy_sample_t(
+            first_index, 0, samples_size, features_size, devs, verbosity,
+            samples, centroids));
       auto q = std::unique_ptr<float[]>(new float[samples_size]);
       kmeans_cuda_afkmc2_calc_q(
-          samples_size, features_size, first_offset / features_size, metric,
+          samples_size, features_size, first_index / features_size, metric,
           devs, fp16x2, verbosity, samples, dists, q.get());
       INFO("done\n");
       auto cand_ind = std::unique_ptr<uint32_t[]>(new uint32_t[m]);
@@ -359,10 +359,11 @@ KMCUDAResult kmeans_init_centroids(
             curr_prob = cand_prob;
           }
         }
-        CUMEMCPY_D2D_ASYNC(*centroids, k * features_size,
-                           samples, cand_ind[curr_ind] * features_size,
-                           features_size);
+        RETERR(cuda_copy_sample_t(
+            cand_ind[curr_ind], k * features_size, samples_size, features_size, devs,
+            verbosity, samples, centroids));
       }
+      SYNC_ALL_DEVS;
       break;
     }
   }
@@ -449,6 +450,8 @@ KMCUDAResult kmeans_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStart());
   #endif
+  RETERR(cuda_transpose(
+      samples_size, features_size, true, devs, verbosity, &device_samples));
   RETERR(kmeans_init_centroids(
       init, init_params, samples_size, features_size, clusters_size, metric,
       seed, devs, device_ptrs, fp16x2, verbosity, centroids, device_samples,
@@ -471,6 +474,10 @@ KMCUDAResult kmeans_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStop());
   #endif
+  if (origin_devi >= 0 || device_ptrs >= 0) {
+    RETERR(cuda_transpose(
+        samples_size, features_size, false, devs, verbosity, &device_samples));
+  }
   if (origin_devi < 0) {
     if (device_ptrs < 0) {
       CUCH(cudaMemcpy(centroids, device_centroids[devs.back()].get(),
@@ -515,9 +522,6 @@ static KMCUDAResult check_knn_args(
   }
   if (samples_size < clusters_size) {
     return kmcudaInvalidArguments;
-  }
-  if (device < 0) {
-    return kmcudaNoSuchDevice;
   }
   int devices = 0;
   cudaGetDeviceCount(&devices);
@@ -611,6 +615,8 @@ KMCUDAResult knn_cuda(
   #ifdef PROFILE
   FOR_EACH_DEV(cudaProfilerStart());
   #endif
+  RETERR(cuda_transpose(
+      samples_size, features_size, true, devs, verbosity, &device_samples));
   {
     INFO("initializing the inverse assignments...\n");
     auto asses_with_idxs = std::unique_ptr<std::tuple<uint32_t, uint32_t>[]>(
@@ -677,6 +683,8 @@ KMCUDAResult knn_cuda(
            kmcudaMemoryCopyError);
     );
   } else {
+    RETERR(cuda_transpose(
+        samples_size, features_size, false, devs, verbosity, &device_samples));
     FOR_EACH_DEVI(
       if (static_cast<int32_t>(devi) == origin_devi) {
         continue;

@@ -145,6 +145,15 @@ class StdoutListener(object):
         return self._stdout
 
 
+def no_memcheck(fn):
+    def wrapped_no_memcheck(self, *args, **kwargs):
+        if os.getenv("CUDA_MEMCHECK", False):
+            self.skipTest("cuda-memcheck is disabled for this test %s"
+                          % fn.__name__)
+        return fn(self, *args, **kwargs)
+    return wrapped_no_memcheck
+
+
 class KmeansTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -295,6 +304,27 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(assignments.shape, (13000,))
         self._validate(centroids, assignments, 0.05)
 
+    @no_memcheck
+    def test_kmeanspp_lloyd_uint32_overflow(self):
+        print("initializing samples...")
+        samples = numpy.empty((167772160, 8), dtype=numpy.float32)
+        tile = numpy.hstack((self.samples,) * 4)
+        for i in range(0, samples.shape[0], self.samples.shape[0]):
+            end = i + self.samples.shape[0]
+            if end < samples.shape[0]:
+                samples[i:end] = tile
+            else:
+                samples[i:] = tile[:samples.shape[0] - i]
+        print("running k-means...")
+        try:
+            with self.stdout:
+                centroids, assignments = kmeans_cuda(
+                    samples, 50, init="kmeans++", device=0,
+                    verbosity=2, seed=3, tolerance=0.142, yinyang_t=0)
+            self.assertEqual(self._get_iters_number(self.stdout), 2)
+        except MemoryError:
+            self.skipTest("Not enough GPU memory.")
+
     def test_random_lloyd_host_ptr(self):
         hostptr = (self.samples.__array_interface__["data"][0],
                    -1, self.samples.shape)
@@ -315,6 +345,7 @@ class KmeansTests(unittest.TestCase):
                 "bullshit", 50, init="random",
                 device=0, verbosity=2, seed=3, tolerance=0.05, yinyang_t=0)
 
+    @no_memcheck
     def test_random_lloyd_same_device_ptr(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -339,6 +370,7 @@ class KmeansTests(unittest.TestCase):
             cuda.api.free(cdevptr)
             cuda.api.free(adevptr)
 
+    @no_memcheck
     def test_random_lloyd_same_device_ptr_all_devs(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -358,11 +390,15 @@ class KmeansTests(unittest.TestCase):
             assignments = cuda.api.copy_to_host(
                 adevptr, 13000, numpy.uint32)
             self._validate(centroids, assignments, 0.05)
+            new_samples = cuda.api.copy_to_host(
+                devptr, self.samples.size, numpy.float32)
         finally:
             cuda.api.free(devptr)
             cuda.api.free(cdevptr)
             cuda.api.free(adevptr)
+        self.assertTrue((self.samples.ravel() == new_samples.ravel()).all())
 
+    @no_memcheck
     def test_random_lloyd_different_device_ptr(self):
         cuda = CUDA()
         devptr = cuda.api.allocate(self.samples.size * 4, 0)
@@ -484,9 +520,9 @@ class KmeansTests(unittest.TestCase):
                 samples, 50, init="kmeans++", device=1,
                 verbosity=2, seed=3, tolerance=0.01, yinyang_t=0.1)
         # fp16 precision increases the number of iterations
-        self.assertEqual(self._get_iters_number(self.stdout), 19 + 5)
+        self.assertEqual(self._get_iters_number(self.stdout), 16 + 7)
         centroids = centroids.astype(numpy.float32)
-        self._validate(centroids, assignments, 0.01)
+        self._validate(centroids, assignments, 0.0105)
 
     @unittest.skipUnless(supports_fp16,
                          "16-bit floats are not supported by this CUDA arch")
@@ -653,6 +689,7 @@ class KnnTests(unittest.TestCase):
     def test_many_large_multiple_dev(self):
         self._test_large(50, 0)
 
+    @no_memcheck
     def _test_device_ptr(self, dev):
         cuda = CUDA()
         sdevptr = cuda.api.allocate(self.samples.size * 4, 0)
