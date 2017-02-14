@@ -13,8 +13,8 @@ ball tree.
 
 | [Benchmarks](#benchmarks) | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
 |---------------------------|----------------|-----------|------------------|--------|--------|--------------|
-| time, s                   | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
-| memory, GB                | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+| speed                     | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x        |
+| memory                    | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x         |
 
 Technically, this project is a library which exports the two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
@@ -143,10 +143,10 @@ Benchmarks
 ### 100000x256@1024
 Comparison of some KMeans implementations:
 
-|             | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
-|-------------|----------------|-----------|------------------|--------|--------|--------------|
-| speed       | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x        |
-| memory      | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x         |
+|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
+|------------|----------------|-----------|------------------|--------|--------|--------------|
+| time, s    | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
+| memory, GB | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
 
 #### Configuration
 * 16-core (32 threads) Intel Xeon E5-2620 v4 @ 2.10GHz
@@ -367,17 +367,17 @@ int main(int argc, const char **argv) {
   assert(assignments);
   float average_distance;
   KMCUDAResult result = kmeans_cuda(
-    kmcudaInitMethodPlusPlus, NULL,  // kmeans++ centroids initialization
-    0.01,                            // less than 1% of the samples are reassigned in the end
-    0.1,                             // activate Yinyang refinement with 0.1 threshold
-    kmcudaDistanceMetricL2,          // Euclidean distance
-    samples_size, features_size, clusters_size,
-    0xDEADBEEF,                      // random generator seed
-    0,                               // use all available CUDA devices
-    -1,                              // samples are supplied from host
-    0,                               // not in float16x2 mode
-    1,                               // moderate verbosity
-    samples, centroids, assignments, &average_distance);
+      kmcudaInitMethodPlusPlus, NULL,  // kmeans++ centroids initialization
+      0.01,                            // less than 1% of the samples are reassigned in the end
+      0.1,                             // activate Yinyang refinement with 0.1 threshold
+      kmcudaDistanceMetricL2,          // Euclidean distance
+      samples_size, features_size, clusters_size,
+      0xDEADBEEF,                      // random generator seed
+      0,                               // use all available CUDA devices
+      -1,                              // samples are supplied from host
+      0,                               // not in float16x2 mode
+      1,                               // moderate verbosity
+      samples, centroids, assignments, &average_distance);
   free(samples);
   free(centroids);
   free(assignments);
@@ -385,7 +385,8 @@ int main(int argc, const char **argv) {
   printf("Average distance between a centroid and the corresponding "
          "cluster members: %f\n", average_distance);
   return 0;
-}```
+}
+```
 Build:
 ```
 gcc -std=c99 -O2 example.c -I/path/to/kmcuda.h/dir -L/path/to/libKMCUDA.so/dir -l KMCUDA -Wl,-rpath,. -o example
