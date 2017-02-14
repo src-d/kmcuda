@@ -145,8 +145,8 @@ Comparison of some KMeans implementations:
 
 |             | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
 |-------------|----------------|-----------|------------------|--------|--------|--------------|
-| time, s     | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
-| memory, GB  | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+| speed       | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x        |
+| memory      | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x         |
 
 #### Configuration
 * 16-core (32 threads) Intel Xeon E5-2620 v4 @ 2.10GHz
@@ -332,6 +332,69 @@ def knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosit
             a host pointer tuple, the return type is numpy array, otherwise, a
             raw pointer (integer) allocated on the same device. The shape is
             (number of samples, k).
+
+C examples
+----------
+`example.c`:
+```C
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <kmcuda.h>
+
+// ./example /path/to/data <number of clusters>
+int main(int argc, const char **argv) {
+  assert(argc == 3);
+  // we open the binary file with the data
+  // [samples_size][features_size][samples_size x features_size]
+  FILE *fin = fopen(argv[1], "rb");
+  assert(fin);
+  uint32_t samples_size, features_size;
+  assert(fread(&samples_size, sizeof(samples_size), 1, fin) == 1);
+  assert(fread(&features_size, sizeof(features_size), 1, fin) == 1);
+  uint64_t total_size = ((uint64_t)samples_size) * features_size;
+  float *samples = malloc(total_size * sizeof(float));
+  assert(samples);
+  assert(fread(samples, sizeof(float), total_size, fin) == total_size);
+  fclose(fin);
+  int clusters_size = atoi(argv[2]);
+  // we will store cluster centers here
+  float *centroids = malloc(clusters_size * features_size * sizeof(float));
+  assert(centroids);
+  // we will store assignments of every sample here
+  uint32_t *assignments = malloc(((uint64_t)samples_size) * sizeof(uint32_t));
+  assert(assignments);
+  float average_distance;
+  KMCUDAResult result = kmeans_cuda(
+    kmcudaInitMethodPlusPlus, NULL,  // kmeans++ centroids initialization
+    0.01,                            // less than 1% of the samples are reassigned in the end
+    0.1,                             // activate Yinyang refinement with 0.1 threshold
+    kmcudaDistanceMetricL2,          // Euclidean distance
+    samples_size, features_size, clusters_size,
+    0xDEADBEEF,                      // random generator seed
+    0,                               // use all available CUDA devices
+    -1,                              // samples are supplied from host
+    0,                               // not in float16x2 mode
+    1,                               // moderate verbosity
+    samples, centroids, assignments, &average_distance);
+  free(samples);
+  free(centroids);
+  free(assignments);
+  assert(result == kmcudaSuccess);
+  printf("Average distance between a centroid and the corresponding "
+         "cluster members: %f\n", average_distance);
+  return 0;
+}```
+Build:
+```
+gcc -std=c99 -O2 example.c -I/path/to/kmcuda.h/dir -L/path/to/libKMCUDA.so/dir -l KMCUDA -Wl,-rpath,. -o example
+```
+Run:
+```
+./example serban.bin 1024
+```
+The file format is the same as in [serban/kmeans](https://github.com/serban/kmeans/blob/master/README#L113).
 
 C API
 -----
