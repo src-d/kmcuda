@@ -3,8 +3,6 @@
 "Yinyang" K-means and K-nn using NVIDIA CUDA
 ============================================
 
-![source{d}](img/sourced.png)
-
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
 of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
 article. While it introduces some overhead and many conditional clauses
@@ -22,6 +20,8 @@ Technically, this project is a library which exports the two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
 It has the built-in Python3 native extension support, so you can
 `from libKMCUDA import kmeans_cuda`.
+
+[![source{d}](img/sourced.png)](img/kmeans_image.ipynb)
 
 Table of contents
 -----------------
