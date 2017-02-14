@@ -3,6 +3,8 @@
 "Yinyang" K-means and K-nn using NVIDIA CUDA
 ============================================
 
+![source{d}](img/sourced.png)
+
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
 of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
 article. While it introduces some overhead and many conditional clauses
@@ -506,6 +508,10 @@ KMCUDAResult knn_cuda(
               samples_size x k in row major format.
 
 Returns KMCUDAResult (see `kmcuda.h`);
+
+How "source{d}" image was created?
+----------------------------------
+Check out this [notebook](img/kmeans_image.ipynb).
 
 License
 -------
