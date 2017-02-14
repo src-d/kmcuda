@@ -11,8 +11,8 @@ before_install:
   - if [[ $TRAVIS_OS_NAME == "osx" ]]; then . .travis.osx; fi
 
 before_script:
-  - mkdir build
-  - cd build
+  - mkdir src/build
+  - cd src/build
   - if [[ $TRAVIS_OS_NAME == "linux" ]]; then cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0 ..; fi
   - if [[ $TRAVIS_OS_NAME == "osx" ]]; then CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" ..; fi
 
