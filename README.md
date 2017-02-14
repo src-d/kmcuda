@@ -21,7 +21,8 @@ defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
 It has the built-in Python3 native extension support, so you can
 `from libKMCUDA import kmeans_cuda`.
 
-[![source{d}](img/sourced.png)](img/kmeans_image.ipynb)
+[![source{d}](img/sourced.png)](http://sourced.tech)
+<p align="right"><a href="img/kmeans_image.ipynb">How this was created?</a></p>
 
 Table of contents
 -----------------
@@ -44,7 +45,6 @@ Table of contents
 * [Python API](#python-api)
 * [C examples](#c-examples)
 * [C API](#c-api)
-* [How "source{d}" image was created?](#how-sourced-image-was-created)
 * [License](#license)
 
 K-means
@@ -532,10 +532,6 @@ KMCUDAResult knn_cuda(
               samples_size x k in row major format.
 
 Returns KMCUDAResult (see `kmcuda.h`);
-
-How "source{d}" image was created?
-----------------------------------
-Check out this [notebook](img/kmeans_image.ipynb).
 
 License
 -------
