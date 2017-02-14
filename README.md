@@ -23,6 +23,30 @@ defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
 It has the built-in Python3 native extension support, so you can
 `from libKMCUDA import kmeans_cuda`.
 
+Table of contents
+-----------------
+* [K-means](#k-means)
+* [K-nn](#k-nn)
+* [Notes](#notes)
+* [Building](#building)
+      * [macOS](#macos)
+* [Testing](#testing)
+* [Benchmarks](#benchmarks)
+   * [100000x256@1024](#100000x2561024)
+      * [Configuration](#configuration)
+      * [Contestants](#contestants)
+      * [Data](#data)
+      * [Notes](#notes-1)
+* [Python examples](#python-examples)
+      * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
+      * [K-means, angular (cosine) distance   average](#k-means-angular-cosine-distance--average)
+      * [K-nn](#k-nn-1)
+* [Python API](#python-api)
+* [C examples](#c-examples)
+* [C API](#c-api)
+* [How "source{d}" image was created?](#how-sourced-image-was-created)
+* [License](#license)
+
 K-means
 -------
 The major difference between this project and others is that kmcuda is
