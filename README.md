@@ -33,11 +33,14 @@ Table of contents
       * [macOS](#macos)
 * [Testing](#testing)
 * [Benchmarks](#benchmarks)
-   * [100000x256@1024](#100000x2561024)
+   * [100,000x256@1024](#100000x2561024)
       * [Configuration](#configuration)
       * [Contestants](#contestants)
       * [Data](#data)
       * [Notes](#notes-1)
+   * [8,000,000x256@1024](#8000000x2561024)
+      * [Data](#data-1)
+      * [Notes](#notes-2)
 * [Python examples](#python-examples)
       * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
       * [K-means, angular (cosine) distance   average](#k-means-angular-cosine-distance--average)
@@ -167,8 +170,6 @@ Benchmarks
 ----------
 
 ### 100000x256@1024
-Comparison of some KMeans implementations:
-
 |            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
 |------------|----------------|-----------|------------------|--------|--------|--------------|
 | time, s    | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
@@ -192,6 +193,21 @@ Comparison of some KMeans implementations:
 
 #### Notes
 100000 is the maximum size Serban KMeans can handle.
+
+### 8000000x256@1024
+|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda 2 GPU | kmcuda Yinyang 2 GPU |
+|------------|----------------|-----------|------------------|--------|--------------|----------------------|
+| time       | please no      | -         | 6h 34m           | fail   | 44m          | 37m                  |
+| memory, GB | -              | -         | 205              | fail   | 8.7          | 10.4                 |
+
+kmeans++ initialization, 93 iterations (1% reassignments equivalent).
+
+#### Data
+8,000,000 secret production samples.
+
+#### Notes
+KmeansRex did eat 205 GB of RAM on peak; it uses dynamic memory so it constantly
+bounced from 100 GB to 200 GB.
 
 Python examples
 ---------------
