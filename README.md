@@ -197,7 +197,7 @@ Benchmarks
 ### 8000000x256@1024
 |            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda 2 GPU | kmcuda Yinyang 2 GPU |
 |------------|----------------|-----------|------------------|--------|--------------|----------------------|
-| time       | please no      | -         | 6h 34m           | fail   | 44m          | 37m                  |
+| time       | please no      | -         | 6h 34m           | fail   | 44m          | 36m                  |
 | memory, GB | -              | -         | 205              | fail   | 8.7          | 10.4                 |
 
 kmeans++ initialization, 93 iterations (1% reassignments equivalent).
