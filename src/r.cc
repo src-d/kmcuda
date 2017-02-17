@@ -42,6 +42,25 @@ namespace {
     }
     return init_iter->second;
   }
+
+  int parse_int(SEXP value) {
+    if (isInteger(value)) {
+      return INTEGER(value)[0];
+    }
+    return REAL(value)[0];
+  }
+
+  int parse_int(const std::unordered_map<std::string, SEXP> &kwargs,
+                const std::string &name, int def) {
+    auto iter = kwargs.find(name);
+    if (iter == kwargs.end()) {
+      return def;
+    }
+    if (!isNumeric(iter->second)) {
+      error("\"%s\" must be an integer", name.c_str());
+    }
+    return parse_int(iter->second);
+  }
 }
 
 extern "C" {
@@ -65,7 +84,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
   int chunks_size = 0;
   {
     SEXP samples_obj = kwargs["samples"];
-    if (isVector(samples_obj)) {
+    if (TYPEOF(samples_obj) == VECSXP) {
       chunks_size = length(samples_obj);
       samples_chunks.reset(new SEXP[chunks_size]);
       for (unsigned i = 0; samples_obj != R_NilValue;
@@ -116,10 +135,10 @@ static SEXP r_kmeans_cuda(SEXP args) {
     }
   }
   SEXP clusters_obj = kwargs["clusters"];
-  if (!isInteger(clusters_obj)) {
+  if (!isNumeric(clusters_obj)) {
     error("\"clusters\" must be a positive integer");
   }
-  int clusters_size = INTEGER(clusters_obj)[0];
+  int clusters_size = parse_int(clusters_obj);
   if (clusters_size <= 0) {
     error("\"clusters\" must be a positive integer");
   }
@@ -140,11 +159,11 @@ static SEXP r_kmeans_cuda(SEXP args) {
       init = parse_dict(kmcuda::init_methods, "init", CAR(init_iter->second));
       if (init == kmcudaInitMethodAFKMC2 && length(init_iter->second) > 1) {
         SEXP afkmc2_m_obj = CAAR(init_iter->second);
-        if (!isInteger(afkmc2_m_obj)) {
+        if (!isNumeric(afkmc2_m_obj)) {
           error("\"init\" = %s: parameter must be a positive integer",
                 CHAR(asChar(CAR(init_iter->second))));
         }
-        afkmc2_m = INTEGER(afkmc2_m_obj)[0];
+        afkmc2_m = parse_int(afkmc2_m_obj);
         if (afkmc2_m <= 0) {
           error("\"init\" = %s: parameter must be a positive integer",
                 CHAR(asChar(CAR(init_iter->second))));
@@ -183,24 +202,12 @@ static SEXP r_kmeans_cuda(SEXP args) {
   if (metric_iter != kwargs.end()) {
     metric = parse_dict(kmcuda::metrics, "metric", metric_iter->second);
   }
-  uint32_t seed = static_cast<uint32_t>(time(NULL));
-  auto seed_iter = kwargs.find("seed");
-  if (seed_iter != kwargs.end()) {
-    seed = static_cast<uint32_t>(INTEGER(seed_iter->second)[0]);
+  uint32_t seed = parse_int(kwargs, "seed", time(NULL));
+  int device = parse_int(kwargs, "device", 0);
+  if (device < 0) {
+    error("\"device\" may not be negative");
   }
-  int device = 0;
-  auto device_iter = kwargs.find("device");
-  if (device_iter != kwargs.end()) {
-    device = INTEGER(device_iter->second)[0];
-    if (device < 0) {
-      error("\"device\" may not be negative");
-    }
-  }
-  int verbosity = 0;
-  auto verbosity_iter = kwargs.find("verbosity");
-  if (verbosity_iter != kwargs.end()) {
-    verbosity = INTEGER(verbosity_iter->second)[0];
-  }
+  int verbosity = parse_int(kwargs, "verbosity", 0);
   float average_distance, *average_distance_ptr = nullptr;
   auto average_distance_iter = kwargs.find("average_distance");
   if (average_distance_iter != kwargs.end()) {
@@ -232,11 +239,17 @@ static SEXP r_kmeans_cuda(SEXP args) {
   SEXP tuple = PROTECT(allocVector(VECSXP, 2 + (average_distance_ptr != nullptr)));
   SET_VECTOR_ELT(tuple, 0, centroids2);
   SET_VECTOR_ELT(tuple, 1, assignments2);
+  SEXP names = PROTECT(allocVector(
+      STRSXP, 2 + (average_distance_ptr != nullptr)));
+  SET_STRING_ELT(names, 0, mkChar("centroids"));
+  SET_STRING_ELT(names, 1, mkChar("assignments"));
   if (average_distance_ptr != nullptr) {
     SEXP average_distance2 = PROTECT(allocVector(REALSXP, 1));
     REAL(average_distance2)[0] = average_distance;
+    SET_STRING_ELT(names, 2, mkChar("average_distance"));
   }
-  UNPROTECT(3 + (average_distance_ptr != nullptr));
+  setAttrib(tuple, R_NamesSymbol, names);
+  UNPROTECT(4 + (average_distance_ptr != nullptr));
   return tuple;
 }
 
