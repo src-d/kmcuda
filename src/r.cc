@@ -84,17 +84,18 @@ static SEXP r_kmeans_cuda(SEXP args) {
   int chunks_size = 0;
   {
     SEXP samples_obj = kwargs["samples"];
-    if (TYPEOF(samples_obj) == VECSXP) {
-      chunks_size = length(samples_obj);
-      samples_chunks.reset(new SEXP[chunks_size]);
-      for (unsigned i = 0; samples_obj != R_NilValue;
-           i++, samples_obj = CDR(samples_obj)) {
-        samples_chunks[i] = CAR(samples_obj);
-      }
-    } else {
+    if (isReal(samples_obj)) {
       chunks_size = 1;
       samples_chunks.reset(new SEXP[1]);
       samples_chunks[0] = samples_obj;
+    } else if (TYPEOF(samples_obj) == VECSXP) {
+      chunks_size = length(samples_obj);
+      samples_chunks.reset(new SEXP[chunks_size]);
+      for (int i = 0; i < chunks_size; i++) {
+        samples_chunks[i] = VECTOR_ELT(samples_obj, i);
+      }
+    } else {
+      error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
     }
   }
   int samples_size = 0, features_size = 0;
@@ -146,6 +147,8 @@ static SEXP r_kmeans_cuda(SEXP args) {
       || clusters_size >= samples_size) {
     error("\"clusters\" is too big");
   }
+  auto centroids = std::unique_ptr<float[]>(
+      new float[clusters_size * features_size]);
   KMCUDAInitMethod init = kmcudaInitMethodPlusPlus;
   int afkmc2_m = 0;
   auto init_iter = kwargs.find("init");
@@ -171,8 +174,21 @@ static SEXP r_kmeans_cuda(SEXP args) {
       } else if (length(init_iter->second) != 1) {
         error("\"init\" has wrong number of parameters");
       }
+    } else if (isReal(init_iter->second)) {
+      init = kmcudaInitMethodImport;
+      double *centroids_double = REAL(init_iter->second);
+      SEXP dims = getAttrib(init_iter->second, R_DimSymbol);
+      if (length(dims) != 2
+          || INTEGER(dims)[0] != clusters_size
+          || INTEGER(dims)[1] != features_size) {
+        error("invalid centroids dimensions in \"init\"");
+      }
+      #pragma omp parallel for simd
+      for (int i = 0; i < clusters_size * features_size; i++) {
+        centroids[i] = centroids_double[i];
+      }
     } else {
-      error("\"init\" must be either a string or a list");
+      error("\"init\" must be either a string or a list or a 2D matrix");
     }
   }
   float tolerance = 0.01;
@@ -215,8 +231,6 @@ static SEXP r_kmeans_cuda(SEXP args) {
       average_distance_ptr = &average_distance;
     }
   }
-  auto centroids = std::unique_ptr<float[]>(
-      new float[clusters_size * features_size]);
   auto assignments = std::unique_ptr<uint32_t[]>(new uint32_t[samples_size]);
   auto result = kmeans_cuda(
     init, &afkmc2_m, tolerance, yinyang_t, metric, samples_size, features_size,
