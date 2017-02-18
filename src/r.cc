@@ -152,7 +152,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
   if (init_iter != kwargs.end()) {
     if (isString(init_iter->second)) {
       init = parse_dict(kmcuda::init_methods, "init", init_iter->second);
-    } else if (isList(init_iter->second)) {
+    } else if (TYPEOF(init_iter->second) == VECSXP) {
       if (length(init_iter->second) == 0) {
         error("\"init\" may not be an empty list");
       }
@@ -232,7 +232,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
   float *centroids_float = centroids.get();
   #pragma omp parallel for simd
   for (int i = 0; i < clusters_size * features_size; i++) {
-    centroids_float[i] = centroids_double[i];
+    centroids_double[i] = centroids_float[i];
   }
   SEXP assignments2 = PROTECT(allocVector(INTSXP, samples_size));
   memcpy(INTEGER(assignments2), assignments.get(), samples_size * sizeof(int));
