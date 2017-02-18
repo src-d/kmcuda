@@ -1,6 +1,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <R.h>
 #include <Rinternals.h>
@@ -9,6 +10,7 @@
 
 namespace {
   std::unordered_map<std::string, SEXP> parse_args(
+      const std::unordered_set<std::string> &allowed,
       std::initializer_list<std::string> required, SEXP args) {
     std::unordered_map<std::string, SEXP> result;
     args = CDR(args);
@@ -23,7 +25,11 @@ namespace {
         }
       } else {
         pure = false;
-        result.emplace(CHAR(PRINTNAME(TAG(args))), arg);
+        const char *name = CHAR(PRINTNAME(TAG(args)));
+        if (allowed.find(name) == allowed.end()) {
+          error("got an unexpected keyword argument \"%s\"", name);
+        }
+        result.emplace(name, arg);
       }
     }
     return result;
@@ -61,6 +67,103 @@ namespace {
     }
     return parse_int(iter->second);
   }
+
+  void parse_samples(
+      const std::unordered_map<std::string, SEXP> &kwargs,
+      std::unique_ptr<float[]> *samples, uint32_t *samples_size,
+      uint16_t *features_size) {
+    std::unique_ptr<SEXP[]> samples_chunks;
+    int chunks_size = 0;
+    {
+      auto samples_iter = kwargs.find("samples");
+      if (samples_iter == kwargs.end()) {
+        error("\"samples\" must be defined");
+      }
+      SEXP samples_obj = samples_iter->second;
+      if (isReal(samples_obj)) {
+        chunks_size = 1;
+        samples_chunks.reset(new SEXP[1]);
+        samples_chunks[0] = samples_obj;
+      } else if (TYPEOF(samples_obj) == VECSXP) {
+        chunks_size = length(samples_obj);
+        samples_chunks.reset(new SEXP[chunks_size]);
+        for (int i = 0; i < chunks_size; i++) {
+          samples_chunks[i] = VECTOR_ELT(samples_obj, i);
+        }
+      } else {
+        error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
+      }
+    }
+    *samples_size = 0;
+    for (int i = 0; i < chunks_size; i++) {
+      if (!isReal(samples_chunks[i])) {
+        error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
+      }
+      SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
+      if (length(dims) != 2) {
+        error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
+      }
+      int samples_size_i = INTEGER(dims)[0];
+      if (static_cast<int64_t>(*samples_size) + samples_size_i > INT32_MAX) {
+        error("too many samples (>INT32_MAX)");
+      }
+      *samples_size += samples_size_i;
+      int features_size_i = INTEGER(dims)[1];
+      if (features_size_i > UINT16_MAX) {
+        error("too many features (>UINT16_MAX)");
+      }
+      if (i == 0) {
+        *features_size = features_size_i;
+      } else if (*features_size != features_size_i) {
+        error("\"samples\" vector contains matrices with different number of columns");
+      }
+    }
+    samples->reset(new float[
+        static_cast<uint64_t>(*samples_size) * *features_size]);
+    float *samples_float = samples->get();
+    {
+      int offset = 0;
+      for (int i = 0; i < chunks_size; i++) {
+        double *samples_double = REAL(samples_chunks[i]);
+        SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
+        int samples_size_i = INTEGER(dims)[0] * *features_size;
+        #pragma omp parallel for simd
+        for (int i = 0; i < samples_size_i; i++) {
+          samples_float[offset + i] = samples_double[i];
+        }
+        offset += samples_size_i;
+      }
+    }
+  }
+
+  KMCUDADistanceMetric parse_metric(
+      const std::unordered_map<std::string, SEXP> &kwargs) {
+    KMCUDADistanceMetric metric = kmcudaDistanceMetricL2;
+    auto metric_iter = kwargs.find("metric");
+    if (metric_iter != kwargs.end()) {
+      metric = parse_dict(kmcuda::metrics, "metric", metric_iter->second);
+    }
+    return metric;
+  }
+
+  int parse_device(
+      const std::unordered_map<std::string, SEXP> &kwargs) {
+    int device = parse_int(kwargs, "device", 0);
+    if (device < 0) {
+      error("\"device\" may not be negative");
+    }
+    return device;
+  }
+
+  static const std::unordered_set<std::string> kmeans_kwargs {
+      "samples", "clusters", "tolerance", "init", "yinyang_t", "metric",
+      "average_distance", "seed", "device", "verbosity"
+  };
+
+  static const std::unordered_set<std::string> knn_kwargs {
+      "k", "samples", "centroids", "assignments", "metric", "device",
+      "verbosity"
+  };
 }
 
 extern "C" {
@@ -79,62 +182,11 @@ void R_init_libKMCUDA(DllInfo *info) {
 }
 
 static SEXP r_kmeans_cuda(SEXP args) {
-  auto kwargs = parse_args({"samples", "clusters"}, args);
-  std::unique_ptr<SEXP[]> samples_chunks;
-  int chunks_size = 0;
-  {
-    SEXP samples_obj = kwargs["samples"];
-    if (isReal(samples_obj)) {
-      chunks_size = 1;
-      samples_chunks.reset(new SEXP[1]);
-      samples_chunks[0] = samples_obj;
-    } else if (TYPEOF(samples_obj) == VECSXP) {
-      chunks_size = length(samples_obj);
-      samples_chunks.reset(new SEXP[chunks_size]);
-      for (int i = 0; i < chunks_size; i++) {
-        samples_chunks[i] = VECTOR_ELT(samples_obj, i);
-      }
-    } else {
-      error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
-    }
-  }
-  int samples_size = 0, features_size = 0;
-  for (int i = 0; i < chunks_size; i++) {
-    if (!isReal(samples_chunks[i])) {
-      error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
-    }
-    SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
-    if (length(dims) != 2) {
-      error("\"samples\" must be a 2D real matrix or a vector of 2D real matrices");
-    }
-    int samples_size_i = INTEGER(dims)[0];
-    if (static_cast<int64_t>(samples_size) + samples_size_i > INT32_MAX) {
-      error("too many samples (>INT32_MAX)");
-    }
-    samples_size += samples_size_i;
-	  int features_size_i = INTEGER(dims)[1];
-    if (i == 0) {
-      features_size = features_size_i;
-    } else if (features_size != features_size_i) {
-      error("\"samples\" vector contains matrices with different number of columns");
-    }
-  }
-  auto samples = std::unique_ptr<float[]>(new float[
-      static_cast<uint64_t>(samples_size) * features_size]);
-  float *samples_float = samples.get();
-  {
-    int offset = 0;
-    for (int i = 0; i < chunks_size; i++) {
-      double *samples_double = REAL(samples_chunks[i]);
-      SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
-      int samples_size_i = INTEGER(dims)[0] * features_size;
-      #pragma omp parallel for simd
-      for (int i = 0; i < samples_size_i; i++) {
-        samples_float[offset + i] = samples_double[i];
-      }
-      offset += samples_size_i;
-    }
-  }
+  auto kwargs = parse_args(kmeans_kwargs, {"samples", "clusters"}, args);
+  std::unique_ptr<float[]> samples;
+  uint32_t samples_size;
+  uint16_t features_size;
+  parse_samples(kwargs, &samples, &samples_size, &features_size);
   SEXP clusters_obj = kwargs["clusters"];
   if (!isNumeric(clusters_obj)) {
     error("\"clusters\" must be a positive integer");
@@ -144,7 +196,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
     error("\"clusters\" must be a positive integer");
   }
   if (static_cast<uint64_t>(clusters_size) * features_size > INT32_MAX
-      || clusters_size >= samples_size) {
+      || static_cast<uint32_t>(clusters_size) >= samples_size) {
     error("\"clusters\" is too big");
   }
   auto centroids = std::unique_ptr<float[]>(
@@ -176,13 +228,13 @@ static SEXP r_kmeans_cuda(SEXP args) {
       }
     } else if (isReal(init_iter->second)) {
       init = kmcudaInitMethodImport;
-      double *centroids_double = REAL(init_iter->second);
       SEXP dims = getAttrib(init_iter->second, R_DimSymbol);
       if (length(dims) != 2
           || INTEGER(dims)[0] != clusters_size
           || INTEGER(dims)[1] != features_size) {
         error("invalid centroids dimensions in \"init\"");
       }
+      double *centroids_double = REAL(init_iter->second);
       #pragma omp parallel for simd
       for (int i = 0; i < clusters_size * features_size; i++) {
         centroids[i] = centroids_double[i];
@@ -213,16 +265,9 @@ static SEXP r_kmeans_cuda(SEXP args) {
       error("\"tolerance\" must be in [0, 0.5]");
     }
   }
-  KMCUDADistanceMetric metric = kmcudaDistanceMetricL2;
-  auto metric_iter = kwargs.find("metric");
-  if (metric_iter != kwargs.end()) {
-    metric = parse_dict(kmcuda::metrics, "metric", metric_iter->second);
-  }
+  KMCUDADistanceMetric metric = parse_metric(kwargs);
   uint32_t seed = parse_int(kwargs, "seed", time(NULL));
-  int device = parse_int(kwargs, "device", 0);
-  if (device < 0) {
-    error("\"device\" may not be negative");
-  }
+  int device = parse_device(kwargs);
   int verbosity = parse_int(kwargs, "verbosity", 0);
   float average_distance, *average_distance_ptr = nullptr;
   auto average_distance_iter = kwargs.find("average_distance");
@@ -234,7 +279,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
   auto assignments = std::unique_ptr<uint32_t[]>(new uint32_t[samples_size]);
   auto result = kmeans_cuda(
     init, &afkmc2_m, tolerance, yinyang_t, metric, samples_size, features_size,
-    clusters_size, seed, device, -1, 0, verbosity, samples_float,
+    clusters_size, seed, device, -1, 0, verbosity, samples.get(),
     centroids.get(), assignments.get(), average_distance_ptr);
   if (result != kmcudaSuccess) {
     error("kmeans_cuda error %d %s%s", result,
@@ -260,6 +305,7 @@ static SEXP r_kmeans_cuda(SEXP args) {
   if (average_distance_ptr != nullptr) {
     SEXP average_distance2 = PROTECT(allocVector(REALSXP, 1));
     REAL(average_distance2)[0] = average_distance;
+    SET_VECTOR_ELT(tuple, 2, average_distance2);
     SET_STRING_ELT(names, 2, mkChar("average_distance"));
   }
   setAttrib(tuple, R_NamesSymbol, names);
@@ -268,8 +314,65 @@ static SEXP r_kmeans_cuda(SEXP args) {
 }
 
 static SEXP r_knn_cuda(SEXP args) {
-  Rprintf("%d arguments\n", length(args));
-  return R_NilValue;
+  auto kwargs = parse_args(
+      knn_kwargs, {"k", "samples", "centroids", "assignments"}, args);
+  int k = parse_int(kwargs, "k", 0);
+  if (k <= 0) {
+    error("\"k\" must be positive");
+  }
+  std::unique_ptr<float[]> samples;
+  uint32_t samples_size;
+  uint16_t features_size;
+  parse_samples(kwargs, &samples, &samples_size, &features_size);
+  auto centroids_iter = kwargs.find("centroids");
+  if (centroids_iter == kwargs.end()) {
+    error("\"centroids\" must be specified");
+  }
+  if (!isReal(centroids_iter->second)) {
+    error("\"centroids\" must be a 2D real matrix");
+  }
+  SEXP dims = getAttrib(centroids_iter->second, R_DimSymbol);
+  if (length(dims) != 2 || INTEGER(dims)[1] != features_size) {
+    error("invalid \"centroids\"'s dimensions");
+  }
+  int clusters_size = INTEGER(dims)[0];
+  std::unique_ptr<float[]> centroids(new float[clusters_size * features_size]);
+  double *centroids_double = REAL(centroids_iter->second);
+  float *centroids_float = centroids.get();
+  #pragma omp parallel for simd
+  for (int i = 0; i < clusters_size * features_size; i++) {
+    centroids_float[i] = centroids_double[i];
+  }
+  auto assignments_iter = kwargs.find("assignments");
+  if (assignments_iter == kwargs.end()) {
+    error("\"assignments\" must be specified");
+  }
+  if (!isInteger(assignments_iter->second)) {
+    error("\"assignments\" must be an integer vector");
+  }
+  dims = getAttrib(assignments_iter->second, R_DimSymbol);
+  if (length(dims) != 1
+      || static_cast<uint32_t>(INTEGER(dims)[0]) != samples_size) {
+    error("invalid \"assignments\"'s dimensions");
+  }
+  std::unique_ptr<uint32_t[]> assignments(new uint32_t[samples_size]);
+  memcpy(assignments.get(), INTEGER(assignments_iter->second),
+         static_cast<uint64_t>(samples_size) * sizeof(uint32_t));
+  KMCUDADistanceMetric metric = parse_metric(kwargs);
+  int device = parse_device(kwargs);
+  int verbosity = parse_int(kwargs, "verbosity", 0);
+  SEXP neighbors = PROTECT(allocMatrix(INTSXP, samples_size, k));
+  auto result = knn_cuda(
+      k, metric, samples_size, features_size, clusters_size, device, -1, 0,
+      verbosity, samples.get(), centroids.get(), assignments.get(),
+      reinterpret_cast<uint32_t*>(INTEGER(neighbors)));
+  if (result != kmcudaSuccess) {
+    error("knn_cuda error %d %s%s", result,
+          kmcuda::statuses.find(result)->second, (verbosity > 0)? "" : "; "
+            "\"verbosity\" = 2 would reveal the details");
+  }
+  UNPROTECT(1);
+  return neighbors;
 }
 
 }  // extern "C"

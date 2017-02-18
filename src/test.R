@@ -63,6 +63,15 @@ if (exists("testing")) {
     print(sprintf("Reassignments: %f", reasses))
     expect_lt(reasses, 0.01)
   })
+  test_that("RandomPlusAverageDistance",{
+    set.seed(42)
+    samples <- replicate(4, runif(16000))
+    result = .External("kmeans_cuda", samples, 50, tolerance=0.01,
+                       init="random", seed=777, verbosity=2,
+                       average_distance=TRUE)
+    print(result$average_distance)
+    expect_equal(result$average_distance, 0.2127081, tolerance=0.0000001);
+  })
 } else {
   testing <- TRUE
   cwd <- getwd()
