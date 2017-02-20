@@ -72,6 +72,22 @@ if (exists("testing")) {
     print(result$average_distance)
     expect_equal(result$average_distance, 0.2127081, tolerance=0.0000001);
   })
+
+  context("K-nn")
+  test_that("Cosine",{
+    set.seed(42)
+    samples <- replicate(4, runif(16000))
+    samples <- samples / sqrt(rowSums(samples^2))
+    cls = .External("kmeans_cuda", samples, 50, tolerance=0.01, metric="cos",
+                    seed=777, verbosity=2, yinyang_t=0)
+    lapply(rowSums(cls$centroids^2), function(r) expect_equal(r, 1, 0.0001))
+    result = .External("knn_cuda", 20, samples, cls$centroids,
+                       cls$assignments, metric="cos", verbosity=2)
+    # the result is properly validated in test.py
+    expect_equal(dim(result), c(16000, 20))
+    expect_equal(class(result), "matrix")
+    expect_equal(sum(apply(result, 1, function(r) length(unique(r)))), 16000 * 20)
+  })
 } else {
   testing <- TRUE
   cwd <- getwd()

@@ -126,12 +126,15 @@ namespace {
       for (int i = 0; i < chunks_size; i++) {
         double *samples_double = REAL(samples_chunks[i]);
         SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
-        int samples_size_i = INTEGER(dims)[0] * *features_size;
-        #pragma omp parallel for simd
-        for (int i = 0; i < samples_size_i; i++) {
-          samples_float[offset + i] = samples_double[i];
+        uint32_t fsize = *features_size;
+        uint32_t ssize = *samples_size;
+        #pragma omp parallel for
+        for (uint64_t f = 0; f < fsize; f++) {
+          for (uint64_t s = 0; s < ssize; s++) {
+            samples_float[offset + s * fsize + f] = samples_double[f * ssize + s];
+          }
         }
-        offset += samples_size_i;
+        offset += INTEGER(dims)[0] * fsize;
       }
     }
   }
@@ -235,9 +238,11 @@ static SEXP r_kmeans_cuda(SEXP args) {
         error("invalid centroids dimensions in \"init\"");
       }
       double *centroids_double = REAL(init_iter->second);
-      #pragma omp parallel for simd
-      for (int i = 0; i < clusters_size * features_size; i++) {
-        centroids[i] = centroids_double[i];
+      #pragma omp parallel for
+      for (uint64_t f = 0; f < features_size; f++) {
+        for (int64_t c = 0; c < clusters_size; c++) {
+          centroids[c * features_size + f] = centroids_double[f * clusters_size + c];
+        }
       }
     } else {
       error("\"init\" must be either a string or a list or a 2D matrix");
@@ -289,9 +294,11 @@ static SEXP r_kmeans_cuda(SEXP args) {
   SEXP centroids2 = PROTECT(allocMatrix(REALSXP, clusters_size, features_size));
   double *centroids_double = REAL(centroids2);
   float *centroids_float = centroids.get();
-  #pragma omp parallel for simd
-  for (int i = 0; i < clusters_size * features_size; i++) {
-    centroids_double[i] = centroids_float[i];
+  #pragma omp parallel for
+  for (uint64_t f = 0; f < features_size; f++) {
+    for (int64_t c = 0; c < clusters_size; c++) {
+      centroids_double[f * clusters_size + c] = centroids_float[c * features_size + f];
+    }
   }
   SEXP assignments2 = PROTECT(allocVector(INTSXP, samples_size));
   memcpy(INTEGER(assignments2), assignments.get(), samples_size * sizeof(int));
@@ -324,6 +331,9 @@ static SEXP r_knn_cuda(SEXP args) {
   uint32_t samples_size;
   uint16_t features_size;
   parse_samples(kwargs, &samples, &samples_size, &features_size);
+  if (static_cast<uint64_t>(samples_size) * k > INT32_MAX) {
+    error("too big \"k\": dim(samples)[0] * k > INT32_MAX");
+  }
   auto centroids_iter = kwargs.find("centroids");
   if (centroids_iter == kwargs.end()) {
     error("\"centroids\" must be specified");
@@ -339,9 +349,11 @@ static SEXP r_knn_cuda(SEXP args) {
   std::unique_ptr<float[]> centroids(new float[clusters_size * features_size]);
   double *centroids_double = REAL(centroids_iter->second);
   float *centroids_float = centroids.get();
-  #pragma omp parallel for simd
-  for (int i = 0; i < clusters_size * features_size; i++) {
-    centroids_float[i] = centroids_double[i];
+  #pragma omp parallel for
+  for (uint64_t f = 0; f < features_size; f++) {
+    for (int64_t c = 0; c < clusters_size; c++) {
+      centroids_float[c * features_size + f] = centroids_double[f * clusters_size + c];
+    }
   }
   auto assignments_iter = kwargs.find("assignments");
   if (assignments_iter == kwargs.end()) {
@@ -350,29 +362,34 @@ static SEXP r_knn_cuda(SEXP args) {
   if (!isInteger(assignments_iter->second)) {
     error("\"assignments\" must be an integer vector");
   }
-  dims = getAttrib(assignments_iter->second, R_DimSymbol);
-  if (length(dims) != 1
-      || static_cast<uint32_t>(INTEGER(dims)[0]) != samples_size) {
-    error("invalid \"assignments\"'s dimensions");
+  if (static_cast<uint32_t>(length(assignments_iter->second)) != samples_size) {
+    error("invalid \"assignments\"'s length");
   }
-  std::unique_ptr<uint32_t[]> assignments(new uint32_t[samples_size]);
-  memcpy(assignments.get(), INTEGER(assignments_iter->second),
-         static_cast<uint64_t>(samples_size) * sizeof(uint32_t));
   KMCUDADistanceMetric metric = parse_metric(kwargs);
   int device = parse_device(kwargs);
   int verbosity = parse_int(kwargs, "verbosity", 0);
-  SEXP neighbors = PROTECT(allocMatrix(INTSXP, samples_size, k));
+  std::unique_ptr<uint32_t[]> neighbors(new uint32_t[samples_size * k]);
   auto result = knn_cuda(
       k, metric, samples_size, features_size, clusters_size, device, -1, 0,
-      verbosity, samples.get(), centroids.get(), assignments.get(),
-      reinterpret_cast<uint32_t*>(INTEGER(neighbors)));
+      verbosity, samples.get(), centroids.get(),
+      reinterpret_cast<uint32_t*>(INTEGER(assignments_iter->second)),
+      neighbors.get());
   if (result != kmcudaSuccess) {
     error("knn_cuda error %d %s%s", result,
           kmcuda::statuses.find(result)->second, (verbosity > 0)? "" : "; "
             "\"verbosity\" = 2 would reveal the details");
   }
+  SEXP neighbors_obj = PROTECT(allocMatrix(INTSXP, samples_size, k));
+  const uint32_t *neighbors_ptr = neighbors.get();
+  int *neighbors_obj_ptr = INTEGER(neighbors_obj);
+  #pragma omp parallel for
+  for (int i = 0; i < k; i++) {
+    for (uint32_t s = 0; s < samples_size; s++) {
+      neighbors_obj_ptr[i * samples_size + s] = neighbors_ptr[s * k + i];
+    }
+  }
   UNPROTECT(1);
-  return neighbors;
+  return neighbors_obj;
 }
 
 }  // extern "C"

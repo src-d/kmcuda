@@ -191,6 +191,31 @@ KMCUDAResult kmeans_init_centroids(
     uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
     int32_t verbosity, const float *host_centroids, const udevptrs<float> &samples,
     udevptrs<float> *dists, udevptrs<float> *aux, udevptrs<float> *centroids) {
+  if (metric == kmcudaDistanceMetricCosine) {
+    // 3 sanity checks
+    float *probe;
+    CUCH(cudaMallocManaged(reinterpret_cast<void**>(&probe),
+                           static_cast<uint32_t>(features_size) * sizeof(float)),
+         kmcudaMemoryAllocationFailure);
+    unique_devptr<float> managed(probe);
+    cudaSetDevice(devs[0]);
+    for (uint32_t s : {0u, samples_size / 2, samples_size - 1}) {
+      RETERR(cuda_extract_sample_t(
+          s, samples_size, features_size, verbosity, samples[0].get(), probe));
+      double norm = 0;
+      #pragma omp simd
+      for (uint16_t i = 0; i < features_size; i++) {
+        float v = probe[i];
+        norm += v * v;
+      }
+      if (norm > 1.0001 || norm < 0.9999) {
+        INFO("error: angular distance: samples[%" PRIu32 "] has L2 norm = %f "
+             "which is outside [0.9999, 1.0001]\n", s, norm);
+        return kmcudaInvalidArguments;
+      }
+    }
+  }
+
   srand(seed);
   switch (method) {
     case kmcudaInitMethodImport:
