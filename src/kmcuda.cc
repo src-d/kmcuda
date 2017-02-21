@@ -120,7 +120,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
         }
         auto err = cudaDeviceEnablePeerAccess(odev, 0);
         if (err == cudaErrorPeerAccessAlreadyEnabled) {
-          INFO("p2p is already enabled on gpu #%d\n", dev);
+          DEBUG("p2p is already enabled on gpu #%d\n", dev);
         } else if (err != cudaSuccess) {
           INFO("warning: failed to enable p2p on gpu #%d: %s\n", dev,
                cudaGetErrorString(err));
