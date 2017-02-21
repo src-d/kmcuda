@@ -303,10 +303,17 @@ static SEXP r_kmeans_cuda(SEXP args) {
   SEXP assignments2 = PROTECT(allocVector(INTSXP, samples_size));
   uint32_t *assignments_ptr = assignments.get();
   int *assignments2_ptr = INTEGER(assignments2);
+  #ifndef __APPLE__
   #pragma omp parallel for simd
   for (uint32_t i = 0; i < samples_size; i++) {
     assignments2_ptr[i] = assignments_ptr[i] + 1;
   }
+  #else
+  #pragma omp simd
+  for (uint32_t i = 0; i < samples_size; i++) {
+    assignments2_ptr[i] = assignments_ptr[i] + 1;
+  }
+  #endif
   SEXP tuple = PROTECT(allocVector(VECSXP, 2 + (average_distance_ptr != nullptr)));
   SET_VECTOR_ELT(tuple, 0, centroids2);
   SET_VECTOR_ELT(tuple, 1, assignments2);
@@ -373,10 +380,17 @@ static SEXP r_knn_cuda(SEXP args) {
   std::unique_ptr<uint32_t[]> assignments(new uint32_t[samples_size]);
   int *assignments_obj_ptr = INTEGER(assignments_iter->second);
   uint32_t *assignments_ptr = assignments.get();
+  #ifndef __APPLE__
   #pragma omp parallel for simd
   for (uint32_t i = 0; i < samples_size; i++) {
     assignments_ptr[i] = assignments_obj_ptr[i] - 1;
   }
+  #else
+  #pragma omp simd
+  for (uint32_t i = 0; i < samples_size; i++) {
+    assignments_ptr[i] = assignments_obj_ptr[i] - 1;
+  }
+  #endif
   KMCUDADistanceMetric metric = parse_metric(kwargs);
   int device = parse_device(kwargs);
   int verbosity = parse_int(kwargs, "verbosity", 0);

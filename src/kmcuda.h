@@ -103,6 +103,7 @@ KMCUDAResult knn_cuda(
 #endif
 
 #ifdef __cplusplus
+#include <string>
 #include <unordered_map>
 
 namespace {
