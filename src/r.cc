@@ -127,14 +127,14 @@ namespace {
         double *samples_double = REAL(samples_chunks[i]);
         SEXP dims = getAttrib(samples_chunks[i], R_DimSymbol);
         uint32_t fsize = *features_size;
-        uint32_t ssize = *samples_size;
+        uint32_t ssize = INTEGER(dims)[0];
         #pragma omp parallel for
         for (uint64_t f = 0; f < fsize; f++) {
           for (uint64_t s = 0; s < ssize; s++) {
             samples_float[offset + s * fsize + f] = samples_double[f * ssize + s];
           }
         }
-        offset += INTEGER(dims)[0] * fsize;
+        offset += ssize * fsize;
       }
     }
   }

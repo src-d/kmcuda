@@ -70,7 +70,7 @@ if (exists("testing")) {
                        init="random", seed=777, verbosity=2,
                        average_distance=TRUE)
     print(result$average_distance)
-    expect_equal(result$average_distance, 0.2127081, tolerance=0.0000001);
+    expect_equal(result$average_distance, 0.2124216, tolerance=0.0000001);
   })
 
   context("K-nn")
