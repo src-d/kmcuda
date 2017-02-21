@@ -301,7 +301,12 @@ static SEXP r_kmeans_cuda(SEXP args) {
     }
   }
   SEXP assignments2 = PROTECT(allocVector(INTSXP, samples_size));
-  memcpy(INTEGER(assignments2), assignments.get(), samples_size * sizeof(int));
+  uint32_t *assignments_ptr = assignments.get();
+  int *assignments2_ptr = INTEGER(assignments2);
+  #pragma omp parallel for simd
+  for (uint32_t i = 0; i < samples_size; i++) {
+    assignments2_ptr[i] = assignments_ptr[i] + 1;
+  }
   SEXP tuple = PROTECT(allocVector(VECSXP, 2 + (average_distance_ptr != nullptr)));
   SET_VECTOR_ELT(tuple, 0, centroids2);
   SET_VECTOR_ELT(tuple, 1, assignments2);
@@ -365,15 +370,20 @@ static SEXP r_knn_cuda(SEXP args) {
   if (static_cast<uint32_t>(length(assignments_iter->second)) != samples_size) {
     error("invalid \"assignments\"'s length");
   }
+  std::unique_ptr<uint32_t[]> assignments(new uint32_t[samples_size]);
+  int *assignments_obj_ptr = INTEGER(assignments_iter->second);
+  uint32_t *assignments_ptr = assignments.get();
+  #pragma omp parallel for simd
+  for (uint32_t i = 0; i < samples_size; i++) {
+    assignments_ptr[i] = assignments_obj_ptr[i] - 1;
+  }
   KMCUDADistanceMetric metric = parse_metric(kwargs);
   int device = parse_device(kwargs);
   int verbosity = parse_int(kwargs, "verbosity", 0);
   std::unique_ptr<uint32_t[]> neighbors(new uint32_t[samples_size * k]);
   auto result = knn_cuda(
       k, metric, samples_size, features_size, clusters_size, device, -1, 0,
-      verbosity, samples.get(), centroids.get(),
-      reinterpret_cast<uint32_t*>(INTEGER(assignments_iter->second)),
-      neighbors.get());
+      verbosity, samples.get(), centroids.get(), assignments_ptr, neighbors.get());
   if (result != kmcudaSuccess) {
     error("knn_cuda error %d %s%s", result,
           kmcuda::statuses.find(result)->second, (verbosity > 0)? "" : "; "
@@ -385,7 +395,7 @@ static SEXP r_knn_cuda(SEXP args) {
   #pragma omp parallel for
   for (int i = 0; i < k; i++) {
     for (uint32_t s = 0; s < samples_size; s++) {
-      neighbors_obj_ptr[i * samples_size + s] = neighbors_ptr[s * k + i];
+      neighbors_obj_ptr[i * samples_size + s] = neighbors_ptr[s * k + i] + 1;
     }
   }
   UNPROTECT(1);
