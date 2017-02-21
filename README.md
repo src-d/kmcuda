@@ -170,6 +170,7 @@ Testing
 `test.py` contains the unit tests based on [unittest](https://docs.python.org/3/library/unittest.html).
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
+`test.R` contains R integration tests and shall be run with `Rscript`.
 
 Benchmarks
 ----------
