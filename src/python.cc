@@ -68,22 +68,6 @@ class _pyobj : public pyobj_parent<O> {
 using pyobj = _pyobj<PyObject>;
 using pyarray = _pyobj<PyArrayObject>;
 
-static const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
-    {"kmeans++", kmcudaInitMethodPlusPlus},
-    {"k-means++", kmcudaInitMethodPlusPlus},
-    {"afkmc2", kmcudaInitMethodAFKMC2},
-    {"random", kmcudaInitMethodRandom}
-};
-
-static const std::unordered_map<std::string, KMCUDADistanceMetric > metrics {
-    {"euclidean", kmcudaDistanceMetricL2},
-    {"L2", kmcudaDistanceMetricL2},
-    {"l2", kmcudaDistanceMetricL2},
-    {"cos", kmcudaDistanceMetricCosine},
-    {"cosine", kmcudaDistanceMetricCosine},
-    {"angular", kmcudaDistanceMetricCosine}
-};
-
 static void set_cuda_malloc_error() {
   PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory on GPU");
 }
@@ -106,8 +90,8 @@ static bool get_metric(PyObject *metric_obj, KMCUDADistanceMetric *metric) {
     return false;
   } else {
     pyobj bytes(PyUnicode_AsASCIIString(metric_obj));
-    auto immetric = metrics.find(PyBytes_AsString(bytes.get()));
-    if (immetric == metrics.end()) {
+    auto immetric = kmcuda::metrics.find(PyBytes_AsString(bytes.get()));
+    if (immetric == kmcuda::metrics.end()) {
       PyErr_SetString(
           PyExc_ValueError,
           "Unknown metric. Supported values are \"L2\" and \"cos\".");
@@ -193,8 +177,8 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
   KMCUDAInitMethod init;
   auto set_init = [&init](PyObject *obj) {
     pyobj bytes(PyUnicode_AsASCIIString(obj));
-    auto iminit = init_methods.find(PyBytes_AsString(bytes.get()));
-    if (iminit == init_methods.end()) {
+    auto iminit = kmcuda::init_methods.find(PyBytes_AsString(bytes.get()));
+    if (iminit == kmcuda::init_methods.end()) {
       PyErr_SetString(
           PyExc_ValueError,
           "Unknown centroids initialization method. Supported values are "

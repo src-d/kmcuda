@@ -18,8 +18,8 @@ ball tree.
 
 Technically, this project is a library which exports the two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
-It has the built-in Python3 native extension support, so you can
-`from libKMCUDA import kmeans_cuda`.
+It has the built-in Python3 and R native extension support, so you can
+`from libKMCUDA import kmeans_cuda` or `dyn.load("libKMCUDA.so")`.
 
 [![source{d}](img/sourced.png)](http://sourced.tech)
 <p align="right"><a href="img/kmeans_image.ipynb">How this was created?</a></p>
@@ -43,9 +43,13 @@ Table of contents
       * [Notes](#notes-2)
 * [Python examples](#python-examples)
       * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
-      * [K-means, angular (cosine) distance   average](#k-means-angular-cosine-distance--average)
+      * [K-means, angular (cosine) distance + average](#k-means-angular-cosine-distance--average)
       * [K-nn](#k-nn-1)
 * [Python API](#python-api)
+* [R examples](#r-examples)
+      * [K-means](#k-means-1)
+      * [K-nn](#k-nn-2)
+* [R API](#r-api)
 * [C examples](#c-examples)
 * [C API](#c-api)
 * [License](#license)
@@ -126,6 +130,7 @@ It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler. The build has
 been tested primarily on Linux but it works on macOS too with some blows and whistles
 (see "macOS" subsection).
 If you do not want to build the Python native module, add `-D DISABLE_PYTHON=y`.
+If you do not want to build the R native module, add `-D DISABLE_R=y`.
 If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0`
 (change the path to the actual one). By default, CUDA kernels are compiled for
 the architecture 60 (Pascal). It is possible to override it via `-D CUDA_ARCH=52`,
@@ -292,7 +297,7 @@ calculated 0.276552 of all the distances
 Python API
 ----------
 ```python
-def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
+def kmeans_cuda(samples, clusters, tolerance=0.01, init="k-means++",
                 yinyang_t=0.1, metric="L2", average_distance=False,
                 seed=time(), device=0, verbosity=0)
 ```
@@ -305,18 +310,20 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 
 **clusters** integer, the number of clusters.
 
-**tolerance** float, if the relative number of reassignments drops below this value, stop.
+**tolerance** float, if the relative number of reassignments drops below this value,
+              algorithm stops.
 
 **init** string or numpy array, sets the method for centroids initialization,
-         may be "k=means++"/"kmeans++", "random" or numpy array of shape
+         may be "k-means++", "afk-mc2", "random" or numpy array of shape
          \[**clusters**, number of features\]. dtype must be float32.
 
 **yinyang_t** float, the relative number of cluster groups, usually 0.1.
+              0 disables Yinyang refinement.
 
 **metric** str, the name of the distance metric to use. The default is Euclidean (L2),
-           can be changed to "cos" to behave as Spherical K-means with the
-           angular distance. Please note that samples *must* be normalized in that
-           case.
+           it can be changed to "cos" to change the algorithm to Spherical K-means
+           with the angular distance. Please note that samples *must* be normalized
+           in the latter case.
 
 **average_distance** boolean, the value indicating whether to calculate
                      the average distance between cluster elements and
@@ -325,17 +332,18 @@ def kmeans_cuda(samples, clusters, tolerance=0.0, init="k-means++",
 
 **seed** integer, random generator seed for reproducible results.
 
-**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device, 2 means second device,
-           3 means using first and second device. Special value 0 enables all available devices.
-           The default is 0.
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device,
+           2 means second device, 3 means using first and second device. Special
+           value 0 enables all available devices. The default is 0.
 
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
               2 means lots of output.
 
-**return** tuple(centroids, assignments). If **samples** was a numpy array or
-           a host pointer tuple, the types are numpy arrays, otherwise, raw pointers
-           (integers) allocated on the same device. If **samples** are float16,
-           the returned centroids are float16 too.
+**return** tuple(centroids, assignments, \[average_distance\]).
+           If **samples** was a numpy array or a host pointer tuple, the types
+           are numpy arrays, otherwise, raw pointers (integers) allocated on the
+           same device. If **samples** are float16, the returned centroids are
+           float16 too.
 
 ```python
 def knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosity=0)
@@ -359,6 +367,108 @@ def knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosit
                 **assignments** is a pointer. The shape is (number of samples,).
 
 **metric** str, the name of the distance metric to use. The default is Euclidean (L2),
+           it can be changed to "cos" to change the algorithm to Spherical K-means
+           with the angular distance. Please note that samples *must* be normalized
+           in the latter case.
+
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device,
+           2 means second device, 3 means using first and second device. Special
+           value 0 enables all available devices. The default is 0.
+
+**verbosity** integer, 0 means complete silence, 1 means mere progress logging,
+              2 means lots of output.
+
+**return** neighbor indices. If **samples** was a numpy array or
+            a host pointer tuple, the return type is numpy array, otherwise, a
+            raw pointer (integer) allocated on the same device. The shape is
+            (number of samples, k).
+
+R examples
+----------
+#### K-means
+```R
+dyn.load("libKMCUDA.so")
+samples = replicate(4, runif(16000))
+result = .External("kmeans_cuda", samples, 50, tolerance=0.01,
+                   seed=777, verbosity=1, average_distance=TRUE)
+print(result$average_distance)
+print(result$centroids[1:10,])
+print(result$assignments[1:10])
+```
+
+#### K-nn
+```R
+dyn.load("libKMCUDA.so")
+samples = replicate(4, runif(16000))
+cls = .External("kmeans_cuda", samples, 50, tolerance=0.01,
+                seed=777, verbosity=1)
+result = .External("knn_cuda", 20, samples, cls$centroids, cls$assignments,
+                   verbosity=1)
+print(result[1:10,])
+```
+
+R API
+-----
+```R
+function kmeans_cuda(
+    samples, clusters, tolerance=0.01, init="k-means++", yinyang_t=0.1,
+    metric="L2", average_distance=FALSE, seed=Sys.time(), device=0, verbosity=0)
+```
+**samples** real matrix of shape \[number of samples, number of features\]
+            or list of real matrices which are rbind()-ed internally. No more
+            than INT32_MAX samples and UINT16_MAX features are supported.
+
+**clusters** integer, the number of clusters.
+
+**tolerance** real, if the relative number of reassignments drops below this value,
+              algorithm stops.
+
+**init** character vector or real matrix, sets the method for centroids initialization,
+         may be "k-means++", "afk-mc2", "random" or real matrix, of shape
+         \[**clusters**, number of features\].
+
+**yinyang_t** real, the relative number of cluster groups, usually 0.1.
+              0 disables Yinyang refinement.
+
+**metric** character vector, the name of the distance metric to use. The default
+           is Euclidean (L2), it can be changed to "cos" to change the algorithm
+           to Spherical K-means with the angular distance. Please note that
+           samples *must* be normalized in the latter case.
+
+**average_distance** logical, the value indicating whether to calculate
+                     the average distance between cluster elements and
+                     the corresponding centroids. Useful for finding
+                     the best K. Returned as the third list element.
+
+**seed** integer, random generator seed for reproducible results.
+
+**device** integer, bitwise OR-ed CUDA device indices, e.g. 1 means first device,
+           2 means second device, 3 means using first and second device. Special
+           value 0 enables all available devices. The default is 0.
+
+**verbosity** integer, 0 means complete silence, 1 means mere progress logging,
+              2 means lots of output.
+
+**return** list(centroids, assignments\[, average_distance\]). Indices in
+           assignments start from 1.
+
+```R
+function knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosity=0)
+```
+**k** integer, the number of neighbors to search for each sample. Must be ≤ 1<sup>16</sup>.
+
+**samples** real matrix of shape \[number of samples, number of features\]
+            or list of real matrices which are rbind()-ed internally.
+            In the latter case, is is possible to pass in more than INT32_MAX
+            samples.
+
+**centroids** real matrix with precalculated clusters' centroids (e.g., using
+              kmeans() or kmeans_cuda()).
+
+**assignments** integer vector with sample-cluster associations. Indices start
+                from 1.
+
+**metric** str, the name of the distance metric to use. The default is Euclidean (L2),
                 can be changed to "cos" to behave as Spherical K-means with the
                 angular distance. Please note that samples *must* be normalized in that
                 case.
@@ -370,10 +480,8 @@ def knn_cuda(k, samples, centroids, assignments, metric="L2", device=0, verbosit
 **verbosity** integer, 0 means complete silence, 1 means mere progress logging,
               2 means lots of output.
 
-**return** neighbor indices. If **samples** was a numpy array or
-            a host pointer tuple, the return type is numpy array, otherwise, a
-            raw pointer (integer) allocated on the same device. The shape is
-            (number of samples, k).
+**return** integer matrix with neighbor indices. The shape is (number of samples, k).
+           Indices start from 1.
 
 C examples
 ----------

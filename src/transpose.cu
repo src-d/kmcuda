@@ -69,6 +69,17 @@ KMCUDAResult cuda_copy_sample_t(
   return kmcudaSuccess;
 }
 
+KMCUDAResult cuda_extract_sample_t(
+    uint32_t index, uint32_t samples_size, uint16_t features_size,
+    int verbosity, const float *samples, float *dest) {
+  dim3 block(min(1024, features_size), 1, 1);
+  dim3 grid(upper(static_cast<unsigned>(features_size), block.x), 1, 1);
+  copy_sample_t<<<grid, block>>>(
+      index, samples_size, features_size, samples, dest);
+  CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError);
+  return kmcudaSuccess;
+}
+
 KMCUDAResult cuda_transpose(
     uint32_t samples_size, uint16_t features_size, bool forward,
     const std::vector<int> &devs, int verbosity, udevptrs<float> *samples) {
