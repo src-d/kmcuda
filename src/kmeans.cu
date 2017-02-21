@@ -437,11 +437,9 @@ __global__ void kmeans_yy_init(
   if (sample >= length) {
     return;
   }
-  bounds += static_cast<uint64_t>(sample) * (d_yy_groups_size + 1);
   for (uint32_t i = 0; i < d_yy_groups_size + 1; i++) {
-    bounds[i] = FLT_MAX;
+    bounds[static_cast<uint64_t>(length) * i + sample] = FLT_MAX;
   }
-  bounds++;
   uint32_t nearest = assignments[sample];
   extern __shared__ float shared_memory[];
   F *volatile shared_centroids = reinterpret_cast<F*>(shared_memory);
@@ -475,11 +473,12 @@ __global__ void kmeans_yy_init(
           samples, shared_centroids + (c - gc) * d_features_size,
           d_samples_size, sample + offset);
       if (c != nearest) {
-        if (dist < bounds[group]) {
-          bounds[group] = dist;
+        uint64_t gindex = static_cast<uint64_t>(length) * (1 + group) + sample;
+        if (dist < bounds[gindex]) {
+          bounds[gindex] = dist;
         }
       } else {
-        bounds[-1] = dist;
+        bounds[sample] = dist;
       }
     }
   }
@@ -549,44 +548,42 @@ __global__ void kmeans_yy_global_filter(
   if (sample >= length) {
     return;
   }
-  bounds += static_cast<uint64_t>(sample) * (d_yy_groups_size + 1);
   uint32_t cluster = assignments[sample];
   assignments_prev[sample] = cluster;
-  float upper_bound = bounds[0];
+  float upper_bound = bounds[sample];
   uint32_t doffset = d_clusters_size * d_features_size;
   float cluster_drift = drifts[doffset + cluster];
   upper_bound += cluster_drift;
-  bounds++;
   float min_lower_bound = FLT_MAX;
   for (uint32_t g = 0; g < d_yy_groups_size; g++) {
-    float lower_bound = bounds[g] - drifts[g];
-    bounds[g] = lower_bound;
+    uint64_t gindex = static_cast<uint64_t>(length) * (1 + g) + sample;
+    float lower_bound = bounds[gindex] - drifts[g];
+    bounds[gindex] = lower_bound;
     if (lower_bound < min_lower_bound) {
       min_lower_bound = lower_bound;
     }
   }
-  bounds--;
   // group filter try #1
   if (min_lower_bound >= upper_bound) {
-    bounds[0] = upper_bound;
+    bounds[sample] = upper_bound;
     return;
   }
   upper_bound = 0;
   upper_bound = METRIC<M, F>::distance_t(
       samples, centroids + cluster * d_features_size,
       d_samples_size, sample + offset);
-  bounds[0] = upper_bound;
+  bounds[sample] = upper_bound;
   // group filter try #2
   if (min_lower_bound >= upper_bound) {
     return;
   }
-  // D'oh!
+  // d'oh!
   passed[atomicAggInc(&d_passed_number)] = sample;
 }
 
 template <KMCUDADistanceMetric M, typename F>
 __global__ void kmeans_yy_local_filter(
-    const uint32_t offset, const F *__restrict__ samples,
+    const uint32_t offset, const uint32_t length, const F *__restrict__ samples,
     const uint32_t *__restrict__ passed, const F *__restrict__ centroids,
     const uint32_t *__restrict__ groups, const float *__restrict__ drifts,
     uint32_t *__restrict__ assignments, float *__restrict__ bounds) {
@@ -595,9 +592,7 @@ __global__ void kmeans_yy_local_filter(
     return;
   }
   sample = passed[sample];
-  bounds += static_cast<uint64_t>(sample) * (d_yy_groups_size + 1);
-  float upper_bound = bounds[0];
-  bounds++;
+  float upper_bound = bounds[sample];
   uint32_t cluster = assignments[sample];
   uint32_t doffset = d_clusters_size * d_features_size;
   float min_dist = upper_bound, second_min_dist = FLT_MAX;
@@ -633,7 +628,8 @@ __global__ void kmeans_yy_local_filter(
         // this may happen if the centroid is insane (NaN)
         continue;
       }
-      float lower_bound = bounds[group];
+      float lower_bound = bounds[
+          static_cast<uint64_t>(length) * (1 + group) + sample];
       if (lower_bound >= upper_bound) {
         if (lower_bound < second_min_dist) {
           second_min_dist = lower_bound;
@@ -658,14 +654,17 @@ __global__ void kmeans_yy_local_filter(
   }
   uint32_t nearest_group = groups[nearest];
   uint32_t previous_group = groups[cluster];
-  bounds[nearest_group] = second_min_dist;
+  bounds[static_cast<uint64_t>(length) * (1 + nearest_group) + sample] =
+      second_min_dist;
   if (nearest_group != previous_group) {
-    float pb = bounds[previous_group];
+    uint64_t gindex =
+        static_cast<uint64_t>(length) * (1 + previous_group) + sample;
+    float pb = bounds[gindex];
     if (pb > upper_bound) {
-      bounds[previous_group] = upper_bound;
+      bounds[gindex] = upper_bound;
     }
   }
-  bounds[-1] = min_dist;
+  bounds[sample] = min_dist;
   if (cluster != nearest) {
     assignments[sample] = nearest;
     atomicAggInc(&d_changed_number);
@@ -1244,7 +1243,7 @@ KMCUDAResult kmeans_cuda_yy(
           (*bounds_yy)[devi].get(), (*passed_yy)[devi].get()));
       dim3 slgrid(upper(length, slblock.x), 1, 1);
       KERNEL_SWITCH(kmeans_yy_local_filter, <<<slgrid, slblock, shmem_sizes[devi]>>>(
-          offset, reinterpret_cast<const F*>(samples[devi].get()),
+          offset, length, reinterpret_cast<const F*>(samples[devi].get()),
           (*passed_yy)[devi].get(), reinterpret_cast<const F*>((*centroids)[devi].get()),
           (*assignments_yy)[devi].get(), (*drifts_yy)[devi].get(),
           (*assignments)[devi].get() + offset, (*bounds_yy)[devi].get()));

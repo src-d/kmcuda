@@ -120,7 +120,7 @@ static std::vector<int> setup_devices(uint32_t device, int device_ptrs, int verb
         }
         auto err = cudaDeviceEnablePeerAccess(odev, 0);
         if (err == cudaErrorPeerAccessAlreadyEnabled) {
-          INFO("p2p is already enabled on gpu #%d\n", dev);
+          DEBUG("p2p is already enabled on gpu #%d\n", dev);
         } else if (err != cudaSuccess) {
           INFO("warning: failed to enable p2p on gpu #%d: %s\n", dev,
                cudaGetErrorString(err));
@@ -191,6 +191,33 @@ KMCUDAResult kmeans_init_centroids(
     uint32_t seed, const std::vector<int> &devs, int device_ptrs, int fp16x2,
     int32_t verbosity, const float *host_centroids, const udevptrs<float> &samples,
     udevptrs<float> *dists, udevptrs<float> *aux, udevptrs<float> *centroids) {
+  if (metric == kmcudaDistanceMetricCosine && !fp16x2) {
+    // 3 sanity checks, not implemented for fp16x2
+    float *probe;
+    CUCH(cudaMallocManaged(reinterpret_cast<void**>(&probe),
+                           static_cast<uint32_t>(features_size) * sizeof(float)),
+         kmcudaMemoryAllocationFailure);
+    unique_devptr<float> managed(probe);
+    cudaSetDevice(devs[0]);
+    for (uint32_t s : {0u, samples_size / 2, samples_size - 1}) {
+      RETERR(cuda_extract_sample_t(
+          s, samples_size, features_size, verbosity, samples[0].get(), probe));
+      double norm = 0;
+      #pragma omp simd
+      for (uint16_t i = 0; i < features_size; i++) {
+        float v = probe[i];
+        norm += v * v;
+      }
+      const float high = 1.00001;
+      const float low = 0.99999;
+      if (norm > high || norm < low) {
+        INFO("error: angular distance: samples[%" PRIu32 "] has L2 norm = %f "
+             "which is outside [%f, %f]\n", s, norm, low, high);
+        return kmcudaInvalidArguments;
+      }
+    }
+  }
+
   srand(seed);
   switch (method) {
     case kmcudaInitMethodImport:

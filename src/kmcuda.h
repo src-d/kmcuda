@@ -102,4 +102,39 @@ KMCUDAResult knn_cuda(
 }  // extern "C"
 #endif
 
+#ifdef __cplusplus
+#include <string>
+#include <unordered_map>
+
+namespace {
+namespace kmcuda {
+const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
+    {"kmeans++", kmcudaInitMethodPlusPlus},
+    {"k-means++", kmcudaInitMethodPlusPlus},
+    {"afkmc2", kmcudaInitMethodAFKMC2},
+    {"afk-mc2", kmcudaInitMethodAFKMC2},
+    {"random", kmcudaInitMethodRandom}
+};
+
+const std::unordered_map<std::string, KMCUDADistanceMetric> metrics {
+    {"euclidean", kmcudaDistanceMetricL2},
+    {"L2", kmcudaDistanceMetricL2},
+    {"l2", kmcudaDistanceMetricL2},
+    {"cos", kmcudaDistanceMetricCosine},
+    {"cosine", kmcudaDistanceMetricCosine},
+    {"angular", kmcudaDistanceMetricCosine}
+};
+
+const std::unordered_map<int, const char *> statuses {
+    {kmcudaSuccess, "Success"},
+    {kmcudaInvalidArguments, "InvalidArguments"},
+    {kmcudaNoSuchDevice, "NoSuchDevice"},
+    {kmcudaMemoryAllocationFailure, "MemoryAllocationFailure"},
+    {kmcudaRuntimeError, "RuntimeError"},
+    {kmcudaMemoryCopyError, "MemoryCopyError"}
+};
+}  // namespace kmcuda
+}  // namespace
+#endif  // __cplusplus
+
 #endif //KMCUDA_KMCUDA_H

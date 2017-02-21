@@ -259,6 +259,10 @@ KMCUDAResult cuda_copy_sample_t(
     const std::vector<int> &devs, int verbosity, const udevptrs<float> &samples,
     udevptrs<float> *dest);
 
+KMCUDAResult cuda_extract_sample_t(
+    uint32_t index, uint32_t samples_size, uint16_t features_size,
+    int verbosity, const float *samples, float *dest);
+
 KMCUDAResult cuda_transpose(
     uint32_t samples_size, uint16_t features_size, bool forward,
     const std::vector<int> &devs, int verbosity, udevptrs<float> *samples);

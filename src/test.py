@@ -447,6 +447,15 @@ class KmeansTests(unittest.TestCase):
         self.assertEqual(numpy.min(assignments), 0)
         self.assertEqual(numpy.max(assignments), 3)
 
+    def test_cosine_metric2(self):
+        samples = numpy.random.random((16000, 4)).astype(numpy.float32)
+        samples /= numpy.linalg.norm(samples, axis=1)[:, numpy.newaxis]
+        centroids, assignments = kmeans_cuda(
+            samples, 50, metric="cos", verbosity=2, seed=3)
+        for c in centroids:
+            norm = numpy.linalg.norm(c)
+            self.assertTrue(0.9999 < norm < 1.0001)
+
     def test_256_features(self):
         arr = numpy.random.rand(1000, 256).astype(numpy.float32)
         arr /= numpy.linalg.norm(arr, axis=1)[:, None]
