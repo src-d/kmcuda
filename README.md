@@ -157,7 +157,7 @@ pip3 install numpy
 ```
 Execute this magic command which builds kmcuda afterwards:
 ```
-CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release ..
+CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release .
 ```
 And make the last important step - rename \*.dylib to \*.so so that Python is able to import the native extension:
 ```
