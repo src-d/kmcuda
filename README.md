@@ -142,7 +142,7 @@ pip install libKMCUDA
 ```
 Otherwise, you'll have to install it from source:
 ```
-pip install git+https://github.com/src-d/kmcuda.git
+pip install git+https://github.com/src-d/kmcuda.git#subdirectory=src
 ```
 
 #### macOS
