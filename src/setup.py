@@ -30,18 +30,17 @@ class CMakeBuild(build_py):
             if cuda_toolkit_dir is None:
                 raise SetupConfigurationError(
                     "CUDA_TOOLKIT_ROOT_DIR environment variable must be defined")
-            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DCUDA_TOOLKIT_ROOT_DIR=%s" % cuda_toolkit_dir,
-                        "."))
+            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release", "-DDISABLE_R=y",
+                        "-DCUDA_TOOLKIT_ROOT_DIR=%s" % cuda_toolkit_dir, "."))
         else:
             ccbin = os.getenv("CUDA_HOST_COMPILER", "/usr/bin/clang")
             env = dict(os.environ)
             env.setdefault("CC", "/usr/local/opt/llvm/bin/clang")
             env.setdefault("CXX", "/usr/local/opt/llvm/bin/clang++")
             env.setdefault("LDFLAGS", "-L/usr/local/opt/llvm/lib/")
-            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DCUDA_HOST_COMPILER=%s" % ccbin,
-                        "-DSUFFIX=.so", "."), env=env)
+            check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release", "-DDISABLE_R=y",
+                        "-DCUDA_HOST_COMPILER=%s" % ccbin, "-DSUFFIX=.so", "."),
+                       env=env)
         check_call(("make", "-j%d" % cpu_count()))
         self.mkpath(self.build_lib)
         dest = os.path.join(self.build_lib, self.SHLIB)
@@ -60,7 +59,7 @@ class BinaryDistribution(Distribution):
 setup(
     name="libKMCUDA",
     description="Accelerated K-means and K-nn on GPU",
-    version="6.1.0",
+    version="6.2.0",
     license="MIT",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",

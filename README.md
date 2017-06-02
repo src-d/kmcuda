@@ -4,25 +4,24 @@
 ============================================
 
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
-of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf)
-article. While it introduces some overhead and many conditional clauses
+of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf). While it introduces some overhead and many conditional clauses
 which are bad for CUDA, it still shows 1.6-2x speedup against the Lloyd
 algorithm. K-nearest neighbors employ the same triangle inequality idea and
-require precalculated centroids and cluster assignments, similar to a flattened
+require precalculated centroids and cluster assignments, similar to the flattened
 ball tree.
 
-| [Benchmarks](#benchmarks) | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
-|---------------------------|----------------|-----------|------------------|--------|--------|--------------|
-| speed                     | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x        |
-| memory                    | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x         |
+| [Benchmarks](#benchmarks) | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPUs |
+|---------------------------|----------------|-----------|------------------|--------|--------|---------------|
+| speed                     | 1x             | 4.5x      | 8.2x             | 15.5x  | 17.8x  | 29.8x         |
+| memory                    | 1x             | 2x        | 2x               | 0.6x   | 0.6x   | 0.6x          |
 
-Technically, this project is a library which exports the two functions
+Technically, this project is a shared library which exports two functions
 defined in `kmcuda.h`: `kmeans_cuda` and `knn_cuda`.
-It has the built-in Python3 and R native extension support, so you can
+It has built-in Python3 and R native extension support, so you can
 `from libKMCUDA import kmeans_cuda` or `dyn.load("libKMCUDA.so")`.
 
 [![source{d}](img/sourced.png)](http://sourced.tech)
-<p align="right"><a href="img/kmeans_image.ipynb">How this was created?</a></p>
+<p align="right"><a href="img/kmeans_image.ipynb">How was this created?</a></p>
 
 Table of contents
 -----------------
@@ -30,7 +29,7 @@ Table of contents
 * [K-nn](#k-nn)
 * [Notes](#notes)
 * [Building](#building)
-      * [macOS](#macos)
+   * [macOS](#macos)
 * [Testing](#testing)
 * [Benchmarks](#benchmarks)
    * [100,000x256@1024](#100000x2561024)
@@ -42,13 +41,13 @@ Table of contents
       * [Data](#data-1)
       * [Notes](#notes-2)
 * [Python examples](#python-examples)
-      * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
-      * [K-means, angular (cosine) distance + average](#k-means-angular-cosine-distance--average)
-      * [K-nn](#k-nn-1)
+   * [K-means, L2 (Euclidean) distance](#k-means-l2-euclidean-distance)
+   * [K-means, angular (cosine) distance + average](#k-means-angular-cosine-distance--average)
+   * [K-nn](#k-nn-1)
 * [Python API](#python-api)
 * [R examples](#r-examples)
-      * [K-means](#k-means-1)
-      * [K-nn](#k-nn-2)
+   * [K-means](#k-means-1)
+   * [K-nn](#k-nn-2)
 * [R API](#r-api)
 * [C examples](#c-examples)
 * [C API](#c-api)
@@ -81,8 +80,8 @@ Read the articles: [1](http://blog.sourced.tech/post/towards_kmeans_on_gpu/),
 K-nn
 ----
 Centroid distance matrix C<sub>ij</sub> is calculated together with clusters'
-radiuses R<sub>i</sub> (the maximum distance from the centroid to the cluster's
-members). Given sample S in cluster A, we avoid calculating the distances from S
+radiuses R<sub>i</sub> (the maximum distance from the centroid to the corresponding
+cluster's members). Given sample S in cluster A, we avoid calculating the distances from S
 to another cluster B's members if C<sub>AB</sub> - SA - R<sub>B</sub> is greater
 than the current maximum K-nn distance. This resembles the [ball tree
 algorithm](http://scikit-learn.org/stable/modules/neighbors.html#ball-tree).
@@ -113,9 +112,9 @@ If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
 (all GPU allocation happens at startup).
 
-Data type is either 32- or 16-bit float. Number of samples is limited by 1^32,
-clusters by 1^32 and features by 1^16 (1^17 for fp16). Besides, the product of
-clusters number and features number may not exceed 1^32.
+Data type is either 32- or 16-bit float. Number of samples is limited by 2^32,
+clusters by 2^32 and features by 2^16 (2^17 for fp16). Besides, the product of
+clusters number and features number may not exceed 2^32.
 
 In the case of 16-bit floats, the reduced precision often leads to a slightly
 increased number of iterations, Yinyang is especially sensitive to that.
@@ -143,7 +142,7 @@ pip install libKMCUDA
 ```
 Otherwise, you'll have to install it from source:
 ```
-pip install git+https://github.com/src-d/kmcuda.git
+pip install git+https://github.com/src-d/kmcuda.git#subdirectory=src
 ```
 
 #### macOS
@@ -158,7 +157,7 @@ pip3 install numpy
 ```
 Execute this magic command which builds kmcuda afterwards:
 ```
-CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release ..
+CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release .
 ```
 And make the last important step - rename \*.dylib to \*.so so that Python is able to import the native extension:
 ```
@@ -170,15 +169,16 @@ Testing
 `test.py` contains the unit tests based on [unittest](https://docs.python.org/3/library/unittest.html).
 They require either [cuda4py](https://github.com/ajkxyz/cuda4py) or [pycuda](https://github.com/inducer/pycuda) and
 [scikit-learn](http://scikit-learn.org/stable/).
+`test.R` contains R integration tests and shall be run with `Rscript`.
 
 Benchmarks
 ----------
 
 ### 100000x256@1024
-|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPU |
-|------------|----------------|-----------|------------------|--------|--------|--------------|
-| time, s    | 164            | 36        | 20               | 10.6   | 9.2    | 5.5          |
-| memory, GB | 1              | 2         | 2                | 0.6    | 0.6    | 0.6          |
+|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda | kmcuda 2 GPUs |
+|------------|----------------|-----------|------------------|--------|--------|---------------|
+| time, s    | 164            | 36        | 20               | 10.6   | 9.2    | 5.5           |
+| memory, GB | 1              | 2         | 2                | 0.6    | 0.6    | 0.6           |
 
 #### Configuration
 * 16-core (32 threads) Intel Xeon E5-2620 v4 @ 2.10GHz
@@ -200,10 +200,10 @@ Benchmarks
 100000 is the maximum size Serban KMeans can handle.
 
 ### 8000000x256@1024
-|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda 2 GPU | kmcuda Yinyang 2 GPU |
-|------------|----------------|-----------|------------------|--------|--------------|----------------------|
-| time       | please no      | -         | 6h 34m           | fail   | 44m          | 36m                  |
-| memory, GB | -              | -         | 205              | fail   | 8.7          | 10.4                 |
+|            | sklearn KMeans | KMeansRex | KMeansRex OpenMP | Serban | kmcuda 2 GPU | kmcuda Yinyang 2 GPUs |
+|------------|----------------|-----------|------------------|--------|--------------|-----------------------|
+| time       | please no      | -         | 6h 34m           | fail   | 44m          | 36m                   |
+| memory, GB | -              | -         | 205              | fail   | 8.7          | 10.4                  |
 
 kmeans++ initialization, 93 iterations (1% reassignments equivalent).
 
