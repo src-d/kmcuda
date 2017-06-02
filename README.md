@@ -112,9 +112,9 @@ If you get OOM with the default parameters, set `yinyang_t` to 0 which
 forces Lloyd. `verbosity` 2 will print the memory allocation statistics
 (all GPU allocation happens at startup).
 
-Data type is either 32- or 16-bit float. Number of samples is limited by 1^32,
-clusters by 1^32 and features by 1^16 (1^17 for fp16). Besides, the product of
-clusters number and features number may not exceed 1^32.
+Data type is either 32- or 16-bit float. Number of samples is limited by 2^32,
+clusters by 2^32 and features by 2^16 (2^17 for fp16). Besides, the product of
+clusters number and features number may not exceed 2^32.
 
 In the case of 16-bit floats, the reduced precision often leads to a slightly
 increased number of iterations, Yinyang is especially sensitive to that.
