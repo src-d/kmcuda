@@ -4,7 +4,8 @@
 ============================================
 
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
-of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf). While it introduces some overhead and many conditional clauses
+of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf).
+While it introduces some overhead and many conditional clauses
 which are bad for CUDA, it still shows 1.6-2x speedup against the Lloyd
 algorithm. K-nearest neighbors employ the same triangle inequality idea and
 require precalculated centroids and cluster assignments, similar to the flattened
@@ -660,3 +661,5 @@ Returns KMCUDAResult (see `kmcuda.h`);
 License
 -------
 MIT license.
+
+#### README {#ignore_this_doxygen_anchor}

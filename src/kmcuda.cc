@@ -15,7 +15,7 @@
 
 #include "private.h"
 
-
+/// Used in kmeans_cuda() to validate function arguments.
 static KMCUDAResult check_kmeans_args(
     float tolerance,
     float yinyang_t,
@@ -659,7 +659,7 @@ KMCUDAResult knn_cuda(
       cudaSetDevice(device_ptrs);
       CUCH(cudaMemcpy(
           asses_on_host.get(), assignments, samples_size * sizeof(uint32_t),
-          cudaMemcpyDeviceToHost), kmcudaRuntimeError);
+          cudaMemcpyDeviceToHost), kmcudaMemoryCopyError);
       #pragma omp parallel for
       for (uint32_t s = 0; s < samples_size; s++) {
         asses_with_idxs[s] = std::make_tuple(asses_on_host[s], s);
