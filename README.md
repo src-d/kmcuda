@@ -662,9 +662,6 @@ Returns KMCUDAResult (see `kmcuda.h`);
 License
 -------
 MIT license.
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda?ref=badge_large)
 
 #### README {#ignore_this_doxygen_anchor}
-
-
-## License
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda?ref=badge_large)
