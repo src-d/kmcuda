@@ -1,4 +1,5 @@
 [![Build Status](https://travis-ci.org/src-d/kmcuda.svg?branch=master)](https://travis-ci.org/src-d/kmcuda) [![PyPI](https://img.shields.io/pypi/v/libKMCUDA.svg)](https://pypi.python.org/pypi/libKMCUDA) [![10.5281/zenodo.286944](https://zenodo.org/badge/DOI/10.5281/zenodo.286944.svg)](https://doi.org/10.5281/zenodo.286944)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda?ref=badge_shield)
 
 "Yinyang" K-means and K-nn using NVIDIA CUDA
 ============================================
@@ -663,3 +664,7 @@ License
 MIT license.
 
 #### README {#ignore_this_doxygen_anchor}
+
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fsrc-d%2Fkmcuda?ref=badge_large)
