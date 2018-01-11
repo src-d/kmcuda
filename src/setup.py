@@ -60,7 +60,7 @@ setup(
     name="libKMCUDA",
     description="Accelerated K-means and K-nn on GPU",
     version="6.2.1",
-    license="MIT",
+    license="Apache Software License",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",
     url="https://github.com/src-d/kmcuda",
