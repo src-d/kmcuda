@@ -4,7 +4,8 @@
 ============================================
 
 K-means implementation is based on ["Yinyang K-Means: A Drop-In Replacement
-of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf). While it introduces some overhead and many conditional clauses
+of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf).
+While it introduces some overhead and many conditional clauses
 which are bad for CUDA, it still shows 1.6-2x speedup against the Lloyd
 algorithm. K-nearest neighbors employ the same triangle inequality idea and
 require precalculated centroids and cluster assignments, similar to the flattened
@@ -213,6 +214,16 @@ kmeans++ initialization, 93 iterations (1% reassignments equivalent).
 #### Notes
 KmeansRex did eat 205 GB of RAM on peak; it uses dynamic memory so it constantly
 bounced from 100 GB to 200 GB.
+
+Contributions
+-------------
+
+...are welcome! See [CONTRIBUTING](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md).
+
+License
+-------
+
+[Apache 2.0](LICENSE.md)
 
 Python examples
 ---------------
@@ -657,6 +668,4 @@ KMCUDAResult knn_cuda(
 
 Returns KMCUDAResult (see `kmcuda.h`);
 
-License
--------
-MIT license.
+#### README {#ignore_this_doxygen_anchor}

@@ -59,7 +59,7 @@ class BinaryDistribution(Distribution):
 setup(
     name="libKMCUDA",
     description="Accelerated K-means and K-nn on GPU",
-    version="6.2.0",
+    version="6.2.1",
     license="MIT",
     author="Vadim Markovtsev",
     author_email="vadim@sourced.tech",
@@ -70,13 +70,14 @@ setup(
     distclass=BinaryDistribution,
     cmdclass={'build_py': CMakeBuild},
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: Apache Software License",
         "Operating System :: POSIX :: Linux",
         "Topic :: Scientific/Engineering :: Information Analysis",
         "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5"
+        "Programming Language :: Python :: 3.5",
+	"Programming Language :: Python :: 3.6",
     ]
 )
 
