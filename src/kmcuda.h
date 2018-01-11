@@ -1,26 +1,82 @@
 #ifndef KMCUDA_KMCUDA_H
 #define KMCUDA_KMCUDA_H
 
+/*! @mainpage KMeansCUDA documentation
+ *
+ * @section s1 Description
+ *
+ * K-means and K-nn on NVIDIA CUDA which are designed for production usage and
+ * simplicity.
+ *
+ * K-means is based on ["Yinyang K-Means: A Drop-In Replacement
+ * of the Classic K-Means with Consistent Speedup"](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ding15.pdf).
+ * While it introduces some overhead and many conditional clauses
+ * which are bad for CUDA, it still shows 1.6-2x speedup against the Lloyd
+ * algorithm. K-nearest neighbors employ the same triangle inequality idea and
+ * require precalculated centroids and cluster assignments, similar to the flattened
+ * ball tree.
+ *
+ * Project: https://github.com/src-d/kmcuda
+ *
+ * README: @ref ignore_this_doxygen_anchor
+ *
+ * @section s2 C/C++ API
+ *
+ * kmcuda.h exports two functions: kmeans_cuda() and knn_cuda(). They are not
+ * thread safe.
+ *
+ * @section s3 Python 3 API
+ *
+ * The shared library exports kmeans_cuda() and knn_cuda() Python wrappers.
+ *
+ * @section s4 R API
+ *
+ * The shared library exports kmeans_cuda() and knn_cuda() R wrappers (.External).
+ *
+ */
+
 #include <stdint.h>
 
+/// All possible error codes in public API.
 typedef enum {
+  /// Everything's all right.
   kmcudaSuccess = 0,
+  /// Arguments which were passed into a function failed the validation.
   kmcudaInvalidArguments,
+  /// The requested CUDA device does not exist.
   kmcudaNoSuchDevice,
+  /// Failed to allocate memory on CUDA device. Too big size? Switch off Yinyang?
   kmcudaMemoryAllocationFailure,
+  /// Something bad and unidentified happened on the CUDA side.
   kmcudaRuntimeError,
+  /// Failed to copy memory to/from CUDA device.
   kmcudaMemoryCopyError
 } KMCUDAResult;
 
+/// Centroid initialization method.
 typedef enum {
+  /// Pick initial centroids randomly.
   kmcudaInitMethodRandom = 0,
+  /// Use kmeans++ initialization method. Theoretically proven to yield
+  /// better clustering than kmcudaInitMethodRandom. O(n * k) complexity.
+  /// https://en.wikipedia.org/wiki/K-means%2B%2B
   kmcudaInitMethodPlusPlus,
+  /// AFK-MC2 initialization method. Theoretically proven to yield
+  /// better clustering results than kmcudaInitMethodRandom; matches
+  /// kmcudaInitMethodPlusPlus asymptotically and fast. O(n + k) complexity.
+  /// Use it when kmcudaInitMethodPlusPlus takes too long to finish.
+  /// http://olivierbachem.ch/files/afkmcmc-oral-pdf.pdf
   kmcudaInitMethodAFKMC2,
+  /// Take user supplied centroids.
   kmcudaInitMethodImport
 } KMCUDAInitMethod;
 
+/// Specifies how to calculate the distance between each pair of dots.
 typedef enum {
+  /// Mesasure the distance between dots using Euclidean distance.
   kmcudaDistanceMetricL2,
+  /// Measure the distance between dots using the angle between them.
+  /// @note This metric requires all the supplied data to be normalized by L2 to 1.
   kmcudaDistanceMetricCosine
 } KMCUDADistanceMetric;
 
@@ -108,6 +164,7 @@ KMCUDAResult knn_cuda(
 
 namespace {
 namespace kmcuda {
+/// Mapping from strings to KMCUDAInitMethod - useful for wrappers.
 const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"kmeans++", kmcudaInitMethodPlusPlus},
     {"k-means++", kmcudaInitMethodPlusPlus},
@@ -116,6 +173,7 @@ const std::unordered_map<std::string, KMCUDAInitMethod> init_methods {
     {"random", kmcudaInitMethodRandom}
 };
 
+/// Mapping from strings to KMCUDADistanceMetric - useful for wrappers.
 const std::unordered_map<std::string, KMCUDADistanceMetric> metrics {
     {"euclidean", kmcudaDistanceMetricL2},
     {"L2", kmcudaDistanceMetricL2},
@@ -125,6 +183,7 @@ const std::unordered_map<std::string, KMCUDADistanceMetric> metrics {
     {"angular", kmcudaDistanceMetricCosine}
 };
 
+/// Mapping from KMCUDAResult to strings - useful for wrappers.
 const std::unordered_map<int, const char *> statuses {
     {kmcudaSuccess, "Success"},
     {kmcudaInvalidArguments, "InvalidArguments"},
