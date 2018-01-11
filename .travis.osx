@@ -2,7 +2,10 @@
 
 brew install llvm --with-clang
 brew tap homebrew/science
-brew install python3 r
+brew install python3 r p7zip
 pip3 install numpy
-brew cask update
-brew cask install --verbose cuda
+curl -O https://storage.googleapis.com/srcd-packages/cuda_8.0.61_mac.dmg
+7z x cuda_8.0.61_mac.dmg
+sudo tar -xf CUDAMacOSXInstaller/CUDAMacOSXInstaller.app/Contents/Resources/payload/cuda_mac_installer_tk.tar.gz -C /
+rm -rf CUDAMacOSXInstaller
+
