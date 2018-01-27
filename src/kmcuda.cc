@@ -507,10 +507,10 @@ KMCUDAResult kmeans_cuda(
   }
   if (origin_devi < 0) {
     if (device_ptrs < 0) {
-      CUCH(cudaMemcpy(centroids, device_centroids[devs.back()].get(),
+      CUCH(cudaMemcpy(centroids, device_centroids[devs.size() - 1].get(),
                       centroids_size * sizeof(float), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
-      CUCH(cudaMemcpy(assignments, device_assignments[devs.back()].get(),
+      CUCH(cudaMemcpy(assignments, device_assignments[devs.size() - 1].get(),
                       samples_size * sizeof(uint32_t), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
     } else {
