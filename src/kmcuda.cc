@@ -507,7 +507,6 @@ KMCUDAResult kmeans_cuda(
   }
   if (origin_devi < 0) {
     if (device_ptrs < 0) {
-      cudaSetDevice(device_ptrs);
       CUCH(cudaMemcpy(centroids, device_centroids[devs.size() - 1].get(),
                       centroids_size * sizeof(float), cudaMemcpyDeviceToHost),
            kmcudaMemoryCopyError);
