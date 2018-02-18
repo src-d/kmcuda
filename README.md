@@ -124,6 +124,8 @@ In some cases, there may be overflows and the clustering may fail completely.
 Building
 --------
 ```
+git clone https://github.com/src-d/kmcuda
+cd src
 cmake -DCMAKE_BUILD_TYPE=Release . && make
 ```
 It requires cudart 8.0 / Pascal and OpenMP 4.0 capable compiler. The build has
