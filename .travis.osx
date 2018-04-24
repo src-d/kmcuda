@@ -2,7 +2,8 @@
 
 brew update
 brew install llvm --with-clang
-brew install python3 r p7zip
+brew install r p7zip
+brew upgrade python
 pip3 install numpy
 curl -O https://storage.googleapis.com/srcd-packages/cuda_8.0.61_mac.dmg
 7z x cuda_8.0.61_mac.dmg
