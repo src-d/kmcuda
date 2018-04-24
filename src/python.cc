@@ -1,3 +1,6 @@
+/// avoid spurious trailing ‘%’ in format error
+/// see https://stackoverflow.com/questions/8132399/how-to-printf-uint64-t-fails-with-spurious-trailing-in-format
+#define __STDC_FORMAT_MACROS
 #include <memory>
 #include <string>
 #include <unordered_map>
