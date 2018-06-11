@@ -12,6 +12,19 @@ typedef double atomic_float;
 typedef float atomic_float;
 #endif
 
+
+#if CUDART_VERSION >= 9000
+#define shfl(...) __shfl_sync(0xFFFFFFFF, __VA_ARGS__)
+#define ballot(...) __ballot_sync(0xFFFFFFFF, __VA_ARGS__)
+#define shfl_down(...) __shfl_down_sync(0xFFFFFFFF, __VA_ARGS__)
+// This one removes all the registry usage optimizations which helped in CUDA 8
+#define volatile
+#else
+#define shfl __shfl
+#define ballot __ballot
+#define shfl_down __shfl_down
+#endif
+
 /// printf() under INFO log level (0).
 #define INFO(...) do { if (verbosity > 0) { printf(__VA_ARGS__); } } while (false)
 /// printf() under DEBUG log level (1).
