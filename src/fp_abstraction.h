@@ -8,7 +8,11 @@
 #include <cfloat>
 
 #if CUDA_ARCH >= 60
+#undef volatile
+#define volatile volatile
 #include <cuda_fp16.h>
+#undef volatile
+#define volatile
 #endif
 
 #define FPATTR __device__ __forceinline__
