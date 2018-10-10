@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh -e
 
 rm -rf /opt/python
 sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
