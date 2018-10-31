@@ -670,4 +670,4 @@ KMCUDAResult knn_cuda(
 
 Returns KMCUDAResult (see `kmcuda.h`);
 
-#### README {#ignore_this_doxygen_anchor}
+
