@@ -21,6 +21,12 @@
     <ClInclude Include="..\..\src\kmcuda.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\metric_abstraction.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\private.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\src\wrappers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
