@@ -84,7 +84,6 @@
     <CudaCompile Include="..\..\src\transpose.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\src\fp_abstraction.h" />
     <ClInclude Include="..\..\src\metric_abstraction.h" />
     <ClInclude Include="..\..\src\private.h" />
     <ClInclude Include="..\..\src\tricks.cuh" />

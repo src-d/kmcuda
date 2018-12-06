@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\src\fp_abstraction.h" />
     <ClInclude Include="..\..\src\kmcuda.h" />
     <ClInclude Include="..\..\src\wrappers.h" />
   </ItemGroup>
