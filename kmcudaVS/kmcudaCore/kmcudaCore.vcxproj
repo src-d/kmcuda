@@ -21,8 +21,6 @@
   <ItemGroup>
     <ClInclude Include="..\..\src\fp_abstraction.h" />
     <ClInclude Include="..\..\src\kmcuda.h" />
-    <ClInclude Include="..\..\src\metric_abstraction.h" />
-    <ClInclude Include="..\..\src\private.h" />
     <ClInclude Include="..\..\src\wrappers.h" />
   </ItemGroup>
   <ItemGroup>
