@@ -2,6 +2,9 @@
 // distance and normalization functions.
 //
 
+#define _USE_MATH_DEFINES
+#include <math.h>
+
 #ifndef KMCUDA_METRIC_ABSTRACTION_H
 #define KMCUDA_METRIC_ABSTRACTION_H
 
