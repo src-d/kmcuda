@@ -15,5 +15,8 @@
     <ClInclude Include="..\..\src\private.h">
       <Filter>Headers</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\src\fp_abstraction.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
