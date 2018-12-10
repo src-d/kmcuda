@@ -1,9 +1,0 @@
-#!/bin/sh -e
-
-rm -rf /opt/python
-sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/cuda-repo-ubuntu1404_8.0.44-1_amd64.deb
-sudo dpkg -i cuda-repo-ubuntu1404_8.0.44-1_amd64.deb
-sudo apt-get update
-sudo apt-get install -y --no-install-suggests --no-install-recommends g++-5 python3-dev python3-numpy r-base-core cuda-cudart-dev-8-0 cuda-curand-dev-8-0 cuda-core-8-0 cuda-misc-headers-8-0
-sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-5 1 --slave /usr/bin/g++ g++ /usr/bin/g++-5
