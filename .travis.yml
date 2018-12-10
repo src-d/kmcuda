@@ -14,7 +14,7 @@ before_script:
   - mkdir src/build
   - cd src/build
   - if [[ $TRAVIS_OS_NAME == "linux" ]]; then cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-8.0 ..; fi
-  - if [[ $TRAVIS_OS_NAME == "osx" ]]; then CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/lib/ cmake -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" ..; fi
+  - if [[ $TRAVIS_OS_NAME == "osx" ]]; then CC=/usr/local/opt/llvm/3.8.1/bin/clang CXX=/usr/local/opt/llvm/3.8.1/bin/clang++ LDFLAGS=-L/usr/local/opt/llvm/3.8.1/lib/ cmake -DCMAKE_BUILD_TYPE=Release -DCUDA_HOST_COMPILER=/usr/local/opt/llvm/3.8.1/bin/clang -G "Unix Makefiles" ..; fi
 
 script:
   - make -j2 VERBOSE=1

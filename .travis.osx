@@ -1,12 +1,13 @@
-#!/bin/sh -e
+#!/bin/sh -e -x
 
-brew update
-brew upgrade python
-brew postinstall python3
-pip3 install numpy
-brew install llvm --with-clang
+brew update >/dev/null
 brew install r p7zip
-curl -O https://storage.googleapis.com/srcd-packages/cuda_8.0.61_mac.dmg
+brew upgrade python
+curl -LO https://homebrew.bintray.com/bottles/llvm-3.8.1.el_capitan.bottle.tar.gz
+tar -xf llvm-3.8.1.el_capitan.bottle.tar.gz -C /usr/local/opt
+rm llvm-3.8.1.el_capitan.bottle.tar.gz
+ls /usr/local/opt/llvm/3.8.1
+curl -LO https://storage.googleapis.com/srcd-packages/cuda_8.0.61_mac.dmg
 7z x cuda_8.0.61_mac.dmg
 sudo tar -xf CUDAMacOSXInstaller/CUDAMacOSXInstaller.app/Contents/Resources/payload/cuda_mac_installer_tk.tar.gz -C /
 rm -rf CUDAMacOSXInstaller
