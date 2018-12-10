@@ -1,4 +1,5 @@
 #include <cfloat>
+#include <algorithm>
 
 #include "private.h"
 #include "metric_abstraction.h"

@@ -37,6 +37,8 @@
 
 #include <stdint.h>
 
+#include<device_launch_parameters.h>
+
 /// All possible error codes in public API.
 typedef enum {
   /// Everything's all right.
