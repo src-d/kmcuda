@@ -17,7 +17,10 @@ template <typename T>
 class unique_devptr : public unique_devptr_parent<T> {
  public:
   explicit unique_devptr(T *ptr, bool fake = false) : unique_devptr_parent<T>(
-      ptr, fake? [](T*){} : [](T *p){ cudaFree(p); }) {}
+	  ptr,
+	  (fake == true)
+	  ? (std::function<void(T*)>)([](T*) {})
+	  : [](T *p) { cudaFree(p); }) {}
 };
 
 /// std::vector of unique_devptr-s. Used to pass device arrays inside .cu

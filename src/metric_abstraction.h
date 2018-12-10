@@ -2,6 +2,9 @@
 // distance and normalization functions.
 //
 
+#define _USE_MATH_DEFINES
+#include <math.h>
+
 #ifndef KMCUDA_METRIC_ABSTRACTION_H
 #define KMCUDA_METRIC_ABSTRACTION_H
 
@@ -169,7 +172,7 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
   }
 
   FPATTR static typename HALF<F>::type distance(
-      F sqr1 __attribute__((unused)), F sqr2 __attribute__((unused)), F prod) {
+      F sqr1, F sqr2, F prod) {
     float fp = _float(_fin(prod));
     if (fp >= 1.f) return _half<F>(0.f);
     if (fp <= -1.f) return _half<F>(M_PI);
@@ -252,7 +255,7 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
     return acos(partial);
   }
 
-  FPATTR static void normalize(uint32_t count __attribute__((unused)), float *vec) {
+  FPATTR static void normalize(uint32_t count, float *vec) {
     // Kahan summation with inverted c
     float norm = 0, corr = 0;
     #pragma unroll 4
@@ -272,7 +275,7 @@ struct METRIC<kmcudaDistanceMetricCosine, F> {
   }
 
   #if CUDA_ARCH >= 60
-  FPATTR static void normalize(uint32_t count __attribute__((unused)), half2 *vec) {
+  FPATTR static void normalize(uint32_t count, half2 *vec) {
     // We really have to calculate norm in 32-bit floats because the maximum
     // value which 16-bit float may represent is 2^16.
     float norm = 0, corr = 0;
