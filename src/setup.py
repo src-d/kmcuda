@@ -27,11 +27,14 @@ class CMakeBuild(build_py):
     def _build(self, builddir=None):
         if platform != "darwin":
             cuda_toolkit_dir = os.getenv("CUDA_TOOLKIT_ROOT_DIR")
+            cuda_arch = os.getenv("CUDA_ARCH", "61")
             if cuda_toolkit_dir is None:
                 raise SetupConfigurationError(
                     "CUDA_TOOLKIT_ROOT_DIR environment variable must be defined")
             check_call(("cmake", "-DCMAKE_BUILD_TYPE=Release", "-DDISABLE_R=y",
-                        "-DCUDA_TOOLKIT_ROOT_DIR=%s" % cuda_toolkit_dir, "."))
+                        "-DCUDA_TOOLKIT_ROOT_DIR=%s" % cuda_toolkit_dir,
+                        "-DCUDA_ARCH=%s" % cuda_arch,
+                        "."))
         else:
             ccbin = os.getenv("CUDA_HOST_COMPILER", "/usr/bin/clang")
             env = dict(os.environ)
