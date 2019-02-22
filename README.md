@@ -138,17 +138,24 @@ If CUDA is not automatically found, add `-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cud
 the architecture 60 (Pascal). It is possible to override it via `-D CUDA_ARCH=52`,
 but fp16 support will be disabled then.
 
-Python users: if you are using Linux x86-64 and CUDA 8.0, then you can
-install libKMCUDA easily:
+Python users:
 ```
-pip install libKMCUDA
-```
-Otherwise, you'll have to install it from source:
-```
-pip install git+https://github.com/src-d/kmcuda.git#subdirectory=src
+CUDA_ARCH=61 pip install libKMCUDA
+# replace 61 with your device version
 ```
 
+Or install it from source:
+```
+CUDA_ARCH=61 pip install git+https://github.com/src-d/kmcuda.git#subdirectory=src
+# replace 61 with your device version
+```
+
+Binary Python packages are quite hard to provide because they depend on CUDA and device architecture versions. PRs welcome!
+
 #### macOS
+macOS build is tricky, but possible. The instructions below correspond to the state from 1 year ago and may be different now.
+Please help with updates!
+
 Install [Homebrew](http://brew.sh/) and the [Command Line Developer Tools](https://developer.apple.com/download/more/)
 which are compatible with your CUDA installation. E.g., CUDA 8.0 does not support
 the latest 8.x and works with 7.3.1 and below. Install `clang` with OpenMP support
