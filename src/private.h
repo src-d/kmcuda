@@ -131,8 +131,7 @@ FOR_EACH_DEV(CUCH(cudaDeviceSynchronize(), kmcudaRuntimeError)); \
   size_t __size = (size) * \
       sizeof(typename std::remove_reference<decltype(dest)>::type::value_type::element_type); \
   CUCH(cudaMalloc(&__ptr, __size), kmcudaMemoryAllocationFailure, \
-       INFO("failed to allocate %zu bytes for " name "\n", \
-            static_cast<size_t>(size))); \
+       INFO("failed to allocate %zu bytes for " name "\n", __size)); \
   (dest).emplace_back(reinterpret_cast<typename std::remove_reference<decltype(dest)> \
       ::type::value_type::element_type *>(__ptr)); \
   TRACE("[%d] " name ": %p - %p (%zu)\n", dev, __ptr, \
