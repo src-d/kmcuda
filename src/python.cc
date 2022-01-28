@@ -199,7 +199,7 @@ static PyObject *py_kmeans_cuda(PyObject *self, PyObject *args, PyObject *kwargs
     if (!set_init(init_obj)) {
       return NULL;
     }
-  } else if PyTuple_Check(init_obj) {
+  } else if (PyTuple_Check(init_obj)) {
     auto e1 = PyTuple_GetItem(init_obj, 0);
     if (e1 == nullptr || e1 == Py_None) {
       PyErr_SetString(
